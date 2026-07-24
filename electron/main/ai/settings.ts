@@ -59,7 +59,8 @@ function normalizeBaseUrl(provider: string, rawBaseUrl: string): string {
     return baseUrl
   }
 
-  if (!baseUrl.endsWith('/v1')) {
+  // 如果 URL 已包含版本段（如 /v1、/v2、/v3），不再追加 /v1
+  if (!/\/v\d+$/i.test(baseUrl)) {
     baseUrl = `${baseUrl}/v1`
   }
 

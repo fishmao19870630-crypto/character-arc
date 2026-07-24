@@ -48,7 +48,8 @@ function buildModelsUrlCandidates(baseUrl: string): string[] {
   if (/(^|\.)open\.bigmodel\.cn(\/|$)/i.test(trimmed) || trimmed.endsWith('/api/paas/v4')) {
     candidates.push(`${trimmed.replace(/\/v1$/i, '')}/models`)
   }
-  if (trimmed.endsWith('/v1')) {
+  if (/\/v\d+$/i.test(trimmed)) {
+    // 已有版本段（如 /v1、/v3、/v4），直接追加 /models
     candidates.push(`${trimmed}/models`)
   } else {
     candidates.push(`${trimmed}/v1/models`)
