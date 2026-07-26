@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Archive, Download, FileJson, FileStack, FileText, FolderOutput, Lightbulb, Moon, Network, PenTool, Save, Upload, Users } from 'lucide-vue-next'
-import { NButton, NCard, NFormItem, NInput, NModal, NSelect, NSwitch, useMessage } from 'naive-ui'
+import { Archive, FileJson, FileStack, FileText, Lightbulb, Moon, Network, PenTool, Save, Upload, Users } from 'lucide-vue-next'
+import { NButton, NCard, NFormItem, NInput, NSelect, NSwitch, useMessage } from 'naive-ui'
 import { getPlainTextFromEditorContent } from '@/features/chapters/editorContent'
 import { autoSaveOptions } from '@/features/settings/autoSave'
 import { buildProjectWritingStyleContext, writingStylePresets } from '@/features/writingStyles/presets'
@@ -10,17 +10,12 @@ import { useAppStore } from '@/stores/app'
 import { toIpcPayload } from '@/utils/ipcPayload'
 import type {
   CharacterArcExportEnvelope,
-  ImportConflictMode,
   ImportExportModuleType,
   ProjectImportPayload
 } from '@/types/app'
 
 const appStore = useAppStore()
 const message = useMessage()
-const importConflictMode = ref<ImportConflictMode>('copy')
-const importModalVisible = ref(false)
-const pendingImportPayload = ref<ProjectImportPayload | null>(null)
-const pendingImportMeta = ref<CharacterArcImportMeta | null>(null)
 const archiveImportRef = ref<{
   pickArchive: () => Promise<void>
   isInspectingArchive: boolean
@@ -56,21 +51,6 @@ const hasStyleDraftChanges = computed(() => {
     draftWritingStylePrompt.value !== (project.writingStylePrompt ?? '')
   )
 })
-// 导入冲突策略选项
-const importConflictOptions = [
-  { label: '新建副本', value: 'copy' as const },
-  { label: '覆盖当前模块', value: 'overwrite' as const }
-]
-// 导入模块类型到中文标签的映射
-const importModuleLabelMap: Record<ImportExportModuleType, string> = {
-  project: '完整项目',
-  characters: '角色资料',
-  outline: '剧情大纲',
-  inspiration: '灵感卡片',
-  relations: '关系组织',
-  chapters: '章节数据'
-}
-
 function saveWritingStyleSettings(): void {
   if (!appStore.currentProject?.id) {
     return
@@ -122,37 +102,6 @@ async function handleExportProjectArchive(): Promise<void> {
     }
   } finally {
     isExportingArchive.value = false
-  }
-}
-
-// 导出完整项目为 JSON 文件
-async function handleExportJson(): Promise<void> {
-  const payload = {
-    project: appStore.currentProject,
-    worldviewEntries: appStore.worldviewEntries,
-    characters: appStore.characters,
-    organizations: appStore.organizations,
-    characterRelationships: appStore.characterRelationships,
-    organizationMemberships: appStore.organizationMemberships,
-    inspirationEntries: appStore.inspirationEntries,
-    outlineVolumes: appStore.outlineVolumes,
-    outlineItems: appStore.outlineItems,
-    chapters: appStore.chapters,
-    chapterVersions: appStore.chapterVersions
-  }
-
-  const result = await window.characterArc.exportJson(toIpcPayload({
-    data: buildExportEnvelope('project', payload),
-    title: '导出完整项目 JSON',
-    defaultPath: `${buildExportStem('project')}.json`
-  }))
-  if (result.success) {
-    message.success('项目数据已导出')
-    return
-  }
-
-  if (!result.canceled) {
-    message.error('导出 JSON 失败，请稍后重试')
   }
 }
 
@@ -295,55 +244,6 @@ async function handleExportChaptersJson(): Promise<void> {
   }
 }
 
-// 导入 JSON 文件：完整项目直接导入，模块数据弹出确认弹窗让用户选择冲突策略
-async function handleImportJson(): Promise<void> {
-  const result = await window.characterArc.importJson()
-  if (result.canceled) {
-    return
-  }
-
-  if (!result.success || !result.payload) {
-    message.error(result.error ?? '导入失败，请检查项目文件格式')
-    return
-  }
-
-  const payload = result.payload as ProjectImportPayload
-  const meta = result.meta ?? {
-    schemaVersion: '1.0',
-    moduleType: 'project' as const,
-    compatibilityNote: '这是旧版 1.x 导出文件，系统已按兼容模式识别为完整项目导入。',
-    isLegacy: true
-  }
-
-  if (meta.moduleType === 'project') {
-    appStore.importProjectData(payload)
-    message.success(meta.isLegacy ? '旧版项目数据已按兼容模式导入' : '项目数据已导入')
-    return
-  }
-
-  pendingImportPayload.value = payload
-  pendingImportMeta.value = meta
-  importConflictMode.value = 'copy'
-  importModalVisible.value = true
-}
-
-// 确认模块导入：根据用户选择的冲突策略执行导入
-function confirmModuleImport(): void {
-  if (!pendingImportPayload.value || !pendingImportMeta.value) {
-    return
-  }
-
-  appStore.importModuleData(pendingImportMeta.value.moduleType, pendingImportPayload.value, importConflictMode.value)
-  importModalVisible.value = false
-  message.success(`${importModuleLabelMap[pendingImportMeta.value.moduleType]}已导入到当前项目`)
-}
-
-function closeImportModal(): void {
-  importModalVisible.value = false
-  pendingImportPayload.value = null
-  pendingImportMeta.value = null
-}
-
 watch(
   () => appStore.currentProject,
   (project) => {
@@ -428,18 +328,6 @@ watch(
               <Upload :size="16" />
             </template>
             导入项目归档 .carc
-          </n-button>
-          <n-button round strong @click="handleImportJson">
-            <template #icon>
-              <Download :size="16" />
-            </template>
-            导入 JSON（兼容）
-          </n-button>
-          <n-button round strong @click="handleExportJson">
-            <template #icon>
-              <FolderOutput :size="16" />
-            </template>
-            导出 JSON（兼容）
           </n-button>
           <n-button round strong @click="handleExportText">
             <template #icon>
@@ -535,45 +423,6 @@ watch(
         </div>
       </n-card>
     </div>
-
-    <n-modal
-      :show="importModalVisible"
-      preset="card"
-      class="arc-editor-modal import-modal"
-      title="导入模块数据"
-      :bordered="false"
-      @close="closeImportModal"
-    >
-      <div class="import-modal-body">
-        <div class="storage-status">
-          <strong>{{ pendingImportMeta ? `检测到 ${importModuleLabelMap[pendingImportMeta.moduleType]} 导入包` : '等待导入文件' }}</strong>
-          <span>{{ pendingImportMeta?.compatibilityNote || '请确认导入策略后再继续。' }}</span>
-        </div>
-
-        <div class="setting-row">
-          <div>
-            <div class="setting-name">Schema 版本</div>
-            <div class="setting-hint">旧版本文件会按兼容模式导入，当前不会直接拒绝 1.x 导出。</div>
-          </div>
-          <div class="import-meta-pill">{{ pendingImportMeta?.schemaVersion || '--' }}</div>
-        </div>
-
-        <n-form-item label="冲突处理策略">
-          <n-select v-model:value="importConflictMode" :options="importConflictOptions" />
-        </n-form-item>
-
-        <div class="setting-hint">
-          新建副本会尽量保留当前项目现有数据；覆盖当前模块只覆盖对应模块，不会删除整个项目。
-        </div>
-      </div>
-
-      <template #footer>
-        <div class="setting-actions">
-          <n-button round strong @click="closeImportModal">取消</n-button>
-          <n-button type="primary" round strong @click="confirmModuleImport">开始导入</n-button>
-        </div>
-      </template>
-    </n-modal>
 
     <ProjectArchiveImportModal ref="archiveImportRef" />
   </section>
@@ -859,26 +708,6 @@ watch(
 .storage-status.error span,
 .storage-status.error strong {
   color: var(--arc-danger);
-}
-
-.import-modal-body {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.import-meta-pill {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 76px;
-  border: 1px solid color-mix(in srgb, var(--arc-primary) 20%, var(--arc-border));
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--arc-primary) 8%, var(--arc-bg-surface));
-  color: var(--arc-primary);
-  font-size: 12px;
-  font-weight: 700;
-  padding: 8px 12px;
 }
 
 @media (max-width: 1240px) {
