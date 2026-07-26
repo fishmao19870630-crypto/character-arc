@@ -155,6 +155,7 @@ function requestDeleteProject(projectId: string): void {
         :announcement-status="announcementStatus"
         :update-status="updateStatus"
         @create="appStore.openWizard()"
+        @continue-import="appStore.openContinuationImport()"
         @import="archiveImportRef?.pickArchive()"
         @open-deconstruction="openDeconstructionLibrary"
         @open-fanqie-trends="appStore.openFanqieTrends()"

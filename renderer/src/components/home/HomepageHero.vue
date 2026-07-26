@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Bell, Flame, ImagePlus, LibraryBig, Plus, RefreshCw, Settings2, Upload, Wrench } from 'lucide-vue-next'
+import { Bell, BookUp2, Flame, ImagePlus, LibraryBig, Plus, RefreshCw, Settings2, Upload, Wrench } from 'lucide-vue-next'
 import { NButton } from 'naive-ui'
 import type { StatusIndicator } from '@/composables/useStartupCheck'
 
@@ -10,6 +10,7 @@ defineProps<{
 
 const emit = defineEmits<{
   (e: 'create'): void
+  (e: 'continueImport'): void
   (e: 'import'): void
   (e: 'openDeconstruction'): void
   (e: 'openFanqieTrends'): void
@@ -60,9 +61,13 @@ const emit = defineEmits<{
         <template #icon><Plus :size="20" /></template>
         新建作品
       </n-button>
+      <n-button size="large" class="continue-import-btn" @click="emit('continueImport')">
+        <template #icon><BookUp2 :size="19" /></template>
+        小说续写
+      </n-button>
       <n-button size="large" class="import-btn" @click="emit('import')">
         <template #icon><Upload :size="19" /></template>
-        导入
+        导入项目备份
       </n-button>
     </div>
   </header>
@@ -158,6 +163,19 @@ const emit = defineEmits<{
   padding: 0 16px !important;
 }
 
+.continue-import-btn {
+  border-radius: 10px !important;
+  border-color: color-mix(in srgb, var(--arc-primary) 34%, var(--arc-border)) !important;
+  background: var(--arc-primary-soft) !important;
+  color: var(--arc-primary) !important;
+  font-weight: 700 !important;
+  padding: 0 16px !important;
+}
+
+.continue-import-btn:hover {
+  border-color: var(--arc-primary) !important;
+}
+
 @media (max-width: 720px) {
   .homepage-hero {
     align-items: stretch;
@@ -175,6 +193,7 @@ const emit = defineEmits<{
   }
 
   .create-btn,
+  .continue-import-btn,
   .import-btn {
     flex: 1;
     justify-content: center;

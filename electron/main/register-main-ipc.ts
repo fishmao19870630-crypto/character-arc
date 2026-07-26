@@ -14,6 +14,7 @@ import { extractReferenceNovelContext, type ReferenceNovelLocalContext } from '.
 import { fetchWithCache } from './github-mirror'
 import { fetchFanqieTrends } from './fanqie-trends'
 import { getWorkspaceDirPath } from './workspace-store'
+import { inspectContinuationNovelFile } from './continuation-import'
 import {
   exportProjectArchive,
   getProjectArchiveDefaultName,
@@ -659,6 +660,34 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
       canceled: false,
       filePath,
       dataUrl: `data:${mime};base64,${bytes.toString('base64')}`
+    }
+  })
+
+  ipcMain.handle('characterarc:pick-continuation-novel', async () => {
+    const window = deps.windowManager.getActiveWindow()
+    if (!window) {
+      return { success: false, canceled: true }
+    }
+
+    const result = await dialog.showOpenDialog(window, {
+      title: '选择需要续写的小说 TXT',
+      properties: ['openFile'],
+      filters: [{ name: 'TXT 小说', extensions: ['txt'] }]
+    })
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { success: false, canceled: true }
+    }
+
+    try {
+      const preview = await inspectContinuationNovelFile(result.filePaths[0])
+      return { success: true, canceled: false, preview }
+    } catch (error) {
+      return {
+        success: false,
+        canceled: false,
+        error: error instanceof Error ? error.message : '读取小说文件失败'
+      }
     }
   })
 

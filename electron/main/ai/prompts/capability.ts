@@ -66,6 +66,8 @@ const TASK_DEFAULT_CAPABILITIES: Record<AiTaskName, PromptCapabilityId[]> = {
   'outline-enhance': ['settings', 'outline', 'worldview', 'characters', 'writing-style'],
   'relation-enhance': ['settings', 'characters', 'relations', 'worldview', 'writing-style'],
   'catalog-batch': ['settings', 'worldview', 'characters', 'relations', 'outline', 'inspiration', 'writing-style'],
+  'continuation-import-chunk': ['settings', 'analysis', 'characters', 'outline'],
+  'continuation-import-aggregate': ['settings', 'analysis', 'characters', 'relations', 'outline', 'worldview'],
   // 封面生成走独立图片通道，不经过 prompt capability 流程；此项仅为满足类型完整性。
   'cover-generate': ['settings']
 }

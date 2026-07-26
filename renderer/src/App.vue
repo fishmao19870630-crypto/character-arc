@@ -6,6 +6,7 @@ import { useAppStore } from '@/stores/app'
 import { createNaiveThemeOverrides, getDarkModePreset } from '@/theme/presets'
 import ProjectCenter from '@/pages/ProjectCenter.vue'
 import ProjectWizardPage from '@/pages/ProjectWizardPage.vue'
+import ContinuationImportPage from '@/pages/ContinuationImportPage.vue'
 import WorkbenchPage from '@/pages/WorkbenchPage.vue'
 import ChapterStudioPage from '@/pages/ChapterStudioPage.vue'
 import DeconstructionLibraryPage from '@/pages/DeconstructionLibraryPage.vue'
@@ -214,6 +215,7 @@ onBeforeUnmount(() => {
             <Transition v-else name="view-fade" mode="out-in">
               <ProjectCenter v-if="appStore.currentView === 'projects'" key="projects" />
               <ProjectWizardPage v-else-if="appStore.currentView === 'wizard'" key="wizard" />
+              <ContinuationImportPage v-else-if="appStore.currentView === 'continuation-import'" key="continuation-import" />
               <ChapterStudioPage v-else-if="appStore.currentView === 'chapter-studio'" key="chapter-studio" />
               <DeconstructionLibraryPage v-else-if="appStore.currentView === 'deconstruction-library'" key="deconstruction-library" />
               <SkillsPage v-else-if="appStore.currentView === 'skills'" key="skills" />

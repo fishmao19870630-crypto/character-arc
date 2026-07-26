@@ -84,6 +84,8 @@ export type AiTaskName =
   | 'relation-enhance'
   | 'catalog-batch'
   | 'cover-generate'
+  | 'continuation-import-chunk'
+  | 'continuation-import-aggregate'
 
 /**
  * AI 运行时注入 prompt 的知识条目。
@@ -442,6 +444,31 @@ export type PlotThreadDetectResult = {
   entries: PlotThreadDetectEntry[]
 }
 
+export type ContinuationImportChapterAnalysis = {
+  chapterId: string
+  title: string
+  summary: string
+  characters: Array<{ name: string; role: string }>
+  hooks: string[]
+}
+
+export type ContinuationImportChunkResult = {
+  entries: ContinuationImportChapterAnalysis[]
+}
+
+export type ContinuationImportAggregateResult = {
+  bookSummary: string
+  continuationStatus: string
+  pendingHooks: string[]
+  characters: Array<{
+    name: string
+    role: string
+    description: string
+    tags: string[]
+  }>
+  volumeSummaries: Array<{ title: string; summary: string }>
+}
+
 /** 所有 AI 任务结果类型的联合类型 */
 export type AiTaskResult =
   | WorldviewResult
@@ -468,6 +495,8 @@ export type AiTaskResult =
   | SpiralSeedResult
   | SpiralExpandResult
   | SpiralValidateResult
+  | ContinuationImportChunkResult
+  | ContinuationImportAggregateResult
 
 /** AI 任务的完整响应：结果 + 运行元数据 */
 export type AiTaskResponse = {

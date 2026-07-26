@@ -235,6 +235,12 @@ declare global {
         filePath?: string
         dataUrl?: string
       }>
+      pickContinuationNovel: () => Promise<{
+        success: boolean
+        canceled: boolean
+        preview?: import('@shared/continuation-import').ContinuationNovelFilePreview & { sourceHash: string }
+        error?: string
+      }>
       generateAi: (payload: unknown) => Promise<{
         success: boolean
         result?: unknown

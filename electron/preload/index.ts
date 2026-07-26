@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('characterArc', {
   // ── 文件操作 ──
   /** 打开系统文件选择对话框，选取项目封面图片 */
   pickCoverImage: () => ipcRenderer.invoke('characterarc:pick-cover-image'),
+  /** 选择一本 TXT 小说并返回续写导入预览 */
+  pickContinuationNovel: () => ipcRenderer.invoke('characterarc:pick-continuation-novel'),
   /** 将当前项目导出为 JSON 文件 */
   exportJson: (payload: unknown) => ipcRenderer.invoke('characterarc:export-json', toIpcPayload(payload)),
   /** 将当前项目导出为 .carc 项目归档包 */

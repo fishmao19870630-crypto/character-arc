@@ -191,6 +191,27 @@ const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
     pending_hooks: stringField.optional(),
     resource_ledger: stringField.optional()
   }),
+  'continuation-import-chunk': z.object({
+    entries: z.array(z.object({
+      chapterId: stringField,
+      title: stringField,
+      summary: stringField,
+      characters: z.array(z.object({ name: stringField, role: stringField })),
+      hooks: stringList
+    }))
+  }),
+  'continuation-import-aggregate': z.object({
+    bookSummary: stringField,
+    continuationStatus: stringField,
+    pendingHooks: stringList,
+    characters: z.array(z.object({
+      name: stringField,
+      role: stringField,
+      description: stringField,
+      tags: stringList
+    })),
+    volumeSummaries: z.array(z.object({ title: stringField, summary: stringField }))
+  }),
   'reference-style-analysis': z.object({
     overview: stringField,
     sentenceStyle: stringField,
