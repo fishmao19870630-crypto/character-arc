@@ -236,6 +236,7 @@ async function handleCommit(ids?: string[]): Promise<void> {
         :is-initializing="assistant.isInitializing.value"
         @open-knowledge="openKnowledgeDocument"
         @continue="assistant.continueWithPrompt"
+        @open-staged="activeTab = 'staged'"
       />
 
       <div v-else class="starter">

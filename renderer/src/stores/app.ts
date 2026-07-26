@@ -2459,13 +2459,12 @@ export const useAppStore = defineStore('app', () => {
     schedulePersist('autosave')
   }
 
-  function updateChapterContent(value: string): void {
-    const chapter = selectedChapter.value
-    if (!chapter) {
+  function updateChapterContent(value: string, chapterId = selectedChapter.value?.id ?? ''): void {
+    if (!chapterId || !chapters.value.some((chapter) => chapter.id === chapterId)) {
       return
     }
 
-    updateChapter(chapter.id, { content: value })
+    updateChapter(chapterId, { content: value })
     schedulePersist('autosave')
   }
 

@@ -1,6 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import { ensureWorkspaceDb } from '../../../workspace-store'
 import { commitChapterEditInDb } from './chapter-commit'
+import {
+  insertInHtml,
+  joinChapterBlocks,
+  replaceInHtml,
+  stripHtmlTags,
+  textToHtmlParagraphs
+} from './chapter-html-edit'
+
+export { textToHtmlParagraphs } from './chapter-html-edit'
 
 export type ChapterData = {
   id: string
@@ -37,117 +46,8 @@ export type SearchResult = {
   content: string
 }
 
-function stripHtmlTags(html: string): string {
-  return html
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .trim()
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
 function countChars(html: string): number {
   return stripHtmlTags(html).replace(/\s/g, '').length
-}
-
-export function textToHtmlParagraphs(text: string): string {
-  return text
-    .split(/\n{2,}|\n/)
-    .filter(Boolean)
-    .map((paragraph) => `<p>${escapeHtml(paragraph.trim())}</p>`)
-    .join('')
-}
-
-function mapPlainIndexToHtml(html: string, plainIdx: number): number {
-  let charCount = 0
-  let i = 0
-  while (i < html.length) {
-    if (html[i] === '<') {
-      while (i < html.length && html[i] !== '>') i++
-      i++
-      continue
-    }
-    if (html[i] === '&') {
-      const semiIdx = html.indexOf(';', i)
-      if (semiIdx !== -1 && semiIdx - i < 10) {
-        if (charCount === plainIdx) return i
-        charCount++
-        i = semiIdx + 1
-        continue
-      }
-    }
-    if (charCount === plainIdx) return i
-    charCount++
-    i++
-  }
-  return html.length
-}
-
-function buildWhitespaceInsensitiveIndex(text: string): { value: string; indexMap: number[] } {
-  let value = ''
-  const indexMap: number[] = []
-  for (let i = 0; i < text.length; i += 1) {
-    if (/\s/.test(text[i])) continue
-    value += text[i]
-    indexMap.push(i)
-  }
-  return { value, indexMap }
-}
-
-function findPlainTextRange(plain: string, search: string): { start: number; end: number } | null {
-  const target = search.trim()
-  if (!target) return null
-
-  const exactStart = plain.indexOf(target)
-  if (exactStart !== -1) {
-    return { start: exactStart, end: exactStart + target.length }
-  }
-
-  const compactTarget = target.replace(/\s+/g, '')
-  if (!compactTarget) return null
-
-  const compactPlain = buildWhitespaceInsensitiveIndex(plain)
-  const compactStart = compactPlain.value.indexOf(compactTarget)
-  if (compactStart === -1) return null
-
-  const compactEnd = compactStart + compactTarget.length - 1
-  return {
-    start: compactPlain.indexMap[compactStart],
-    end: compactPlain.indexMap[compactEnd] + 1
-  }
-}
-
-function replaceInHtml(html: string, search: string, replacement: string): string {
-  const plain = stripHtmlTags(html)
-  const range = findPlainTextRange(plain, search)
-  if (!range) {
-    throw new Error(`Could not find target text: "${search.slice(0, 50)}..."`)
-  }
-  const htmlStart = mapPlainIndexToHtml(html, range.start)
-  const htmlEnd = mapPlainIndexToHtml(html, range.end)
-  return html.slice(0, htmlStart) + textToHtmlParagraphs(replacement) + html.slice(htmlEnd)
-}
-
-function insertInHtml(html: string, search: string, insertionHtml: string, position: 'before' | 'after'): string {
-  const plain = stripHtmlTags(html)
-  const range = findPlainTextRange(plain, search)
-  if (!range) {
-    throw new Error(`Could not find anchor text: "${search.slice(0, 50)}..."`)
-  }
-  const anchorIdx = position === 'before'
-    ? mapPlainIndexToHtml(html, range.start)
-    : mapPlainIndexToHtml(html, range.end)
-  return html.slice(0, anchorIdx) + insertionHtml + html.slice(anchorIdx)
 }
 
 function normalizeSearchScope(scope?: string[]): Set<string> | null {
@@ -314,7 +214,7 @@ export async function applyChapterEdit(
 
   if (edit.operation === 'append') {
     const htmlToAppend = textToHtmlParagraphs(edit.content)
-    newContent = oldContent + htmlToAppend
+    newContent = joinChapterBlocks(oldContent, htmlToAppend, 'end')
     preview = `Appended ${edit.content.length} chars`
   } else if (edit.operation === 'replace') {
     if (!edit.search) {
@@ -330,13 +230,12 @@ export async function applyChapterEdit(
     if (!edit.search && edit.position !== 'start' && edit.position !== 'end') {
       throw new Error('insert requires search or start/end position')
     }
-    const htmlToInsert = textToHtmlParagraphs(edit.content)
     if (edit.position === 'start') {
-      newContent = htmlToInsert + oldContent
+      newContent = joinChapterBlocks(oldContent, textToHtmlParagraphs(edit.content), 'start')
     } else if (edit.position === 'end' || !edit.search) {
-      newContent = oldContent + htmlToInsert
+      newContent = joinChapterBlocks(oldContent, textToHtmlParagraphs(edit.content), 'end')
     } else {
-      newContent = insertInHtml(oldContent, edit.search.trim(), htmlToInsert, edit.position ?? 'after')
+      newContent = insertInHtml(oldContent, edit.search.trim(), edit.content, edit.position ?? 'after')
     }
     preview = `Inserted ${edit.content.length} chars`
   } else {
@@ -373,7 +272,7 @@ export async function computeChapterEdit(
 
   if (edit.operation === 'append') {
     const htmlToAppend = textToHtmlParagraphs(edit.content)
-    newContent = oldContent + htmlToAppend
+    newContent = joinChapterBlocks(oldContent, htmlToAppend, 'end')
     preview = `Appended ${edit.content.length} chars`
   } else if (edit.operation === 'replace') {
     if (!edit.search) {
@@ -389,13 +288,12 @@ export async function computeChapterEdit(
     if (!edit.search && edit.position !== 'start' && edit.position !== 'end') {
       throw new Error('insert requires search or start/end position')
     }
-    const htmlToInsert = textToHtmlParagraphs(edit.content)
     if (edit.position === 'start') {
-      newContent = htmlToInsert + oldContent
+      newContent = joinChapterBlocks(oldContent, textToHtmlParagraphs(edit.content), 'start')
     } else if (edit.position === 'end' || !edit.search) {
-      newContent = oldContent + htmlToInsert
+      newContent = joinChapterBlocks(oldContent, textToHtmlParagraphs(edit.content), 'end')
     } else {
-      newContent = insertInHtml(oldContent, edit.search.trim(), htmlToInsert, edit.position ?? 'after')
+      newContent = insertInHtml(oldContent, edit.search.trim(), edit.content, edit.position ?? 'after')
     }
     preview = `Inserted ${edit.content.length} chars`
   } else {

@@ -9,6 +9,12 @@ import { ensureEditorHtmlContent } from '@/features/chapters/editorContent'
 import type { ChapterInsertionRequest, ChapterSelectionState } from '@/types/app'
 import { EditorSearchExtension } from '@/features/chapters/editorSearch'
 
+export type ChapterRecoverySnapshot = {
+  chapterId: string
+  content: string
+  savedAt: string
+}
+
 const props = defineProps<{
   chapterId: string
   modelValue: string
@@ -16,14 +22,19 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  'update:modelValue': [value: string]
+  'update:modelValue': [value: string, chapterId: string]
   'consume-insertion': [requestId: string]
   'selection-change': [selection: ChapterSelectionState | null]
+  'recovery-available': [snapshot: ChapterRecoverySnapshot | null]
 }>()
 
 const EMIT_DEBOUNCE_MS = 600
+const RECOVERY_DEBOUNCE_MS = 1_000
 let emitTimer: number | null = null
+let recoveryTimer: number | null = null
 let pendingEmit = false
+let pendingEmitChapterId = ''
+let pendingEmitHtml = ''
 let editorFocused = false
 let savedSelection: { from: number; to: number } | null = null
 
@@ -34,18 +45,86 @@ function flushEmit(): void {
   }
   if (pendingEmit && editor.value) {
     pendingEmit = false
-    emit('update:modelValue', editor.value.getHTML())
+    emit('update:modelValue', pendingEmitHtml || editor.value.getHTML(), pendingEmitChapterId || props.chapterId)
+    pendingEmitChapterId = ''
+    pendingEmitHtml = ''
   }
 }
 
 function scheduleEmit(html: string): void {
   pendingEmit = true
+  pendingEmitChapterId = props.chapterId
+  pendingEmitHtml = html
   if (emitTimer !== null) window.clearTimeout(emitTimer)
   emitTimer = window.setTimeout(() => {
     emitTimer = null
     pendingEmit = false
-    emit('update:modelValue', html)
+    emit('update:modelValue', pendingEmitHtml, pendingEmitChapterId)
+    pendingEmitChapterId = ''
+    pendingEmitHtml = ''
   }, EMIT_DEBOUNCE_MS)
+}
+
+function recoveryKey(chapterId: string): string {
+  return `arc:chapter-recovery:${chapterId}`
+}
+
+function readRecovery(chapterId: string): ChapterRecoverySnapshot | null {
+  try {
+    const raw = localStorage.getItem(recoveryKey(chapterId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<ChapterRecoverySnapshot>
+    if (parsed.chapterId !== chapterId || typeof parsed.content !== 'string' || typeof parsed.savedAt !== 'string') {
+      return null
+    }
+    return parsed as ChapterRecoverySnapshot
+  } catch {
+    return null
+  }
+}
+
+function writeRecovery(chapterId: string, content: string): void {
+  try {
+    localStorage.setItem(recoveryKey(chapterId), JSON.stringify({
+      chapterId,
+      content,
+      savedAt: new Date().toISOString()
+    } satisfies ChapterRecoverySnapshot))
+  } catch {
+    // 恢复快照失败不应中断正文编辑。
+  }
+}
+
+function scheduleRecovery(content: string): void {
+  const chapterId = props.chapterId
+  if (recoveryTimer !== null) window.clearTimeout(recoveryTimer)
+  recoveryTimer = window.setTimeout(() => {
+    recoveryTimer = null
+    writeRecovery(chapterId, content)
+  }, RECOVERY_DEBOUNCE_MS)
+}
+
+function checkRecovery(): void {
+  const snapshot = readRecovery(props.chapterId)
+  const persisted = ensureEditorHtmlContent(props.modelValue)
+  emit('recovery-available', snapshot && snapshot.content !== persisted ? snapshot : null)
+}
+
+function restoreRecovery(): void {
+  const snapshot = readRecovery(props.chapterId)
+  if (!snapshot || !editor.value) return
+  editor.value.commands.setContent(snapshot.content, { emitUpdate: false })
+  emit('update:modelValue', snapshot.content, props.chapterId)
+  emit('recovery-available', null)
+}
+
+function discardRecovery(): void {
+  try {
+    localStorage.removeItem(recoveryKey(props.chapterId))
+  } catch {
+    // ignore
+  }
+  emit('recovery-available', null)
 }
 
 function handleSelectionUpdate(): void {
@@ -84,7 +163,12 @@ const editor = useEditor({
     },
   },
   onUpdate: ({ editor: e }) => {
-    scheduleEmit(e.getHTML())
+    const html = e.getHTML()
+    scheduleEmit(html)
+    scheduleRecovery(html)
+  },
+  onCreate: () => {
+    nextTick(checkRecovery)
   },
   onFocus: () => {
     editorFocused = true
@@ -100,13 +184,19 @@ const editor = useEditor({
 
 watch(
   () => props.chapterId,
-  () => {
+  (nextChapterId, previousChapterId) => {
     flushEmit()
+    if (recoveryTimer !== null) {
+      window.clearTimeout(recoveryTimer)
+      recoveryTimer = null
+      if (editor.value && previousChapterId) writeRecovery(previousChapterId, editor.value.getHTML())
+    }
     savedSelection = null
     nextTick(() => {
       if (editor.value) {
         editor.value.commands.setContent(ensureEditorHtmlContent(props.modelValue), { emitUpdate: false })
       }
+      if (nextChapterId) checkRecovery()
     })
   }
 )
@@ -157,17 +247,22 @@ watch(
       e.chain().insertContentAt(endPos, request.content).run()
     }
 
-    emit('update:modelValue', e.getHTML())
+    emit('update:modelValue', e.getHTML(), props.chapterId)
     emit('consume-insertion', request.id)
   }
 )
 
 onBeforeUnmount(() => {
   flushEmit()
+  if (recoveryTimer !== null) {
+    window.clearTimeout(recoveryTimer)
+    recoveryTimer = null
+    if (editor.value) writeRecovery(props.chapterId, editor.value.getHTML())
+  }
   editor.value?.destroy()
 })
 
-defineExpose({ editor })
+defineExpose({ editor, restoreRecovery, discardRecovery })
 </script>
 
 <template>

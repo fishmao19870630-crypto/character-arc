@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ArrowLeft, ChevronDown, ChevronsDownUp, FilePlus, FileText, FolderPlus, GripVertical, MoreVertical, Plus, Search } from 'lucide-vue-next'
 import { NButton, NDropdown, NForm, NFormItem, NInput, NModal, NSelect, NTag, NTooltip, useDialog, useMessage } from 'naive-ui'
 import ChapterMetaDialog from './ChapterMetaDialog.vue'
@@ -78,6 +78,55 @@ const totalWords = computed(() =>
   appStore.chapters.reduce((n, c) => n + getChapterCharacterCount(c.content), 0)
 )
 
+type ChapterTreeGroup = (typeof appStore.chapterVolumeGroups)[number]
+type ChapterTreeRow =
+  | { key: string; kind: 'volume'; group: ChapterTreeGroup }
+  | { key: string; kind: 'chapter'; group: ChapterTreeGroup; chapter: ChapterDraft }
+  | { key: string; kind: 'add'; group: ChapterTreeGroup }
+
+const TREE_ROW_HEIGHT = 40
+const TREE_OVERSCAN = 8
+const treeScrollRef = ref<HTMLDivElement | null>(null)
+const treeScrollTop = ref(0)
+const treeViewportHeight = ref(0)
+let treeResizeObserver: ResizeObserver | null = null
+
+const treeRows = computed<ChapterTreeRow[]>(() => {
+  const rows: ChapterTreeRow[] = []
+  for (const group of filteredGroups.value) {
+    rows.push({ key: `volume:${group.volume.id}`, kind: 'volume', group })
+    if (collapsed[group.volume.id]) continue
+    for (const chapter of group.items) {
+      rows.push({ key: `chapter:${chapter.id}`, kind: 'chapter', group, chapter })
+    }
+    rows.push({ key: `add:${group.volume.id}`, kind: 'add', group })
+  }
+  return rows
+})
+
+const virtualTreeWindow = computed(() => {
+  const total = treeRows.value.length
+  const start = Math.max(0, Math.floor(treeScrollTop.value / TREE_ROW_HEIGHT) - TREE_OVERSCAN)
+  const visibleCount = Math.ceil(treeViewportHeight.value / TREE_ROW_HEIGHT) + TREE_OVERSCAN * 2
+  const end = Math.min(total, start + Math.max(visibleCount, TREE_OVERSCAN * 2))
+  return {
+    rows: treeRows.value.slice(start, end),
+    top: start * TREE_ROW_HEIGHT,
+    bottom: Math.max(0, (total - end) * TREE_ROW_HEIGHT)
+  }
+})
+
+function syncTreeViewport(): void {
+  const el = treeScrollRef.value
+  if (!el) return
+  treeScrollTop.value = el.scrollTop
+  treeViewportHeight.value = el.clientHeight
+}
+
+function handleTreeScroll(event: Event): void {
+  treeScrollTop.value = (event.currentTarget as HTMLDivElement).scrollTop
+}
+
 const allCollapsed = computed(() =>
   appStore.outlineVolumes.length > 0 && appStore.outlineVolumes.every((v) => collapsed[v.id])
 )
@@ -128,6 +177,45 @@ watch(
     createForm.title = item.title
   }
 )
+
+watch(
+  () => treeRows.value.length,
+  () => {
+    requestAnimationFrame(() => {
+      const el = treeScrollRef.value
+      if (!el) return
+      const maxScroll = Math.max(0, treeRows.value.length * TREE_ROW_HEIGHT - el.clientHeight)
+      if (el.scrollTop > maxScroll) el.scrollTop = maxScroll
+      syncTreeViewport()
+    })
+  }
+)
+
+watch(
+  () => appStore.selectedChapterId,
+  (chapterId) => {
+    requestAnimationFrame(() => {
+      const el = treeScrollRef.value
+      if (!el) return
+      const index = treeRows.value.findIndex((row) => row.kind === 'chapter' && row.chapter.id === chapterId)
+      if (index < 0) return
+      const top = index * TREE_ROW_HEIGHT
+      const bottom = top + TREE_ROW_HEIGHT
+      if (top < el.scrollTop) el.scrollTop = top
+      else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight
+    })
+  }
+)
+
+onMounted(() => {
+  syncTreeViewport()
+  treeResizeObserver = new ResizeObserver(syncTreeViewport)
+  if (treeScrollRef.value) treeResizeObserver.observe(treeScrollRef.value)
+})
+
+onBeforeUnmount(() => {
+  treeResizeObserver?.disconnect()
+})
 
 function toggleVolume(id: string): void {
   collapsed[id] = !collapsed[id]
@@ -592,66 +680,66 @@ function handleMenuSelect(key: string | number, chapter: ChapterDraft): void {
       <input v-model="keyword" placeholder="搜索章节..." />
     </div>
 
-    <div class="ts-scroll arc-scrollbar">
-      <section
-        v-for="group in filteredGroups"
-        :key="group.volume.id"
-        class="volume"
-        :class="{
-          collapsed: collapsed[group.volume.id],
-          'drop-target': dragTargetVolumeId === group.volume.id,
-          'volume-dragging': draggingVolumeId === group.volume.id,
-          'volume-drop-before': volumeDragTargetId === group.volume.id && volumeDragTargetPosition === 'before',
-          'volume-drop-after': volumeDragTargetId === group.volume.id && volumeDragTargetPosition === 'after'
-        }"
-        @dragover="handleVolumeDragOver(group.volume.id, $event)"
-        @dragleave="handleVolumeDragLeave(group.volume.id, $event)"
-        @drop="handleDropOnVolume(group.volume.id, $event)"
-      >
-        <button class="volume-head" @click="toggleVolume(group.volume.id)">
+    <div ref="treeScrollRef" class="ts-scroll arc-scrollbar" @scroll="handleTreeScroll">
+      <div :style="{ height: virtualTreeWindow.top + 'px' }" aria-hidden="true" />
+      <template v-for="row in virtualTreeWindow.rows" :key="row.key">
+        <section
+          v-if="row.kind === 'volume'"
+          class="volume virtual-tree-row"
+          :class="{
+            collapsed: collapsed[row.group.volume.id],
+            'drop-target': dragTargetVolumeId === row.group.volume.id,
+            'volume-dragging': draggingVolumeId === row.group.volume.id,
+            'volume-drop-before': volumeDragTargetId === row.group.volume.id && volumeDragTargetPosition === 'before',
+            'volume-drop-after': volumeDragTargetId === row.group.volume.id && volumeDragTargetPosition === 'after'
+          }"
+          @dragover="handleVolumeDragOver(row.group.volume.id, $event)"
+          @dragleave="handleVolumeDragLeave(row.group.volume.id, $event)"
+          @drop="handleDropOnVolume(row.group.volume.id, $event)"
+        >
+        <button class="volume-head" @click="toggleVolume(row.group.volume.id)">
           <span
             class="volume-grip"
             draggable="true"
             title="拖动分卷排序"
             aria-label="拖动分卷排序"
             @click.stop
-            @dragstart.stop="handleVolumeDragStart(group.volume.id, $event)"
+            @dragstart.stop="handleVolumeDragStart(row.group.volume.id, $event)"
             @dragend.stop="resetVolumeDragState"
           >
             <GripVertical :size="12" />
           </span>
           <ChevronDown :size="13" class="chevron" />
-          <span class="volume-title">{{ formatVolumeLabel(group.volume, group.index, 'compact') }}</span>
+          <span class="volume-title">{{ formatVolumeLabel(row.group.volume, row.group.index, 'compact') }}</span>
           <span
-            v-if="volumeDragTargetId === group.volume.id && volumeDragTargetPosition"
+            v-if="volumeDragTargetId === row.group.volume.id && volumeDragTargetPosition"
             class="volume-drop-label"
           >
             {{ volumeDragTargetPosition === 'before' ? '移到卷前' : '移到卷后' }}
           </span>
-          <span v-if="dragTargetVolumeId === group.volume.id" class="volume-drop-label">放到卷末</span>
-          <span class="volume-meta">{{ group.items.length }}</span>
-          <n-dropdown :options="volumeMenuOptions" placement="bottom-end" @select="(k) => handleVolumeMenuSelect(k, group.volume)">
+          <span v-if="dragTargetVolumeId === row.group.volume.id" class="volume-drop-label">放到卷末</span>
+          <span class="volume-meta">{{ row.group.items.length }}</span>
+          <n-dropdown :options="volumeMenuOptions" placement="bottom-end" @select="(k) => handleVolumeMenuSelect(k, row.group.volume)">
             <span class="volume-more" @click.stop>
               <MoreVertical :size="12" />
             </span>
           </n-dropdown>
         </button>
+        </section>
 
-        <div v-show="!collapsed[group.volume.id]" class="chapter-list">
+        <div v-else-if="row.kind === 'chapter'" class="chapter-list virtual-tree-row">
           <button
-            v-for="chapter in group.items"
-            :key="chapter.id"
             class="chapter-row"
             :class="{
-              active: appStore.selectedChapterId === chapter.id,
-              dragging: draggingChapterId === chapter.id,
-              'drop-before': dragTargetChapterId === chapter.id && dragTargetPosition === 'before',
-              'drop-after': dragTargetChapterId === chapter.id && dragTargetPosition === 'after'
+              active: appStore.selectedChapterId === row.chapter.id,
+              dragging: draggingChapterId === row.chapter.id,
+              'drop-before': dragTargetChapterId === row.chapter.id && dragTargetPosition === 'before',
+              'drop-after': dragTargetChapterId === row.chapter.id && dragTargetPosition === 'after'
             }"
-            @click="appStore.selectChapter(chapter.id); emit('navigate')"
-            @dragover.stop="draggingVolumeId ? handleVolumeDragOver(group.volume.id, $event) : handleChapterDragOver(chapter.id, $event)"
-            @dragleave.stop="draggingVolumeId ? handleVolumeDragLeave(group.volume.id, $event) : handleChapterDragLeave(chapter.id, $event)"
-            @drop.stop="draggingVolumeId ? handleDropOnVolume(group.volume.id, $event) : handleChapterDrop(chapter.id, $event)"
+            @click="appStore.selectChapter(row.chapter.id); emit('navigate')"
+            @dragover.stop="draggingVolumeId ? handleVolumeDragOver(row.group.volume.id, $event) : handleChapterDragOver(row.chapter.id, $event)"
+            @dragleave.stop="draggingVolumeId ? handleVolumeDragLeave(row.group.volume.id, $event) : handleChapterDragLeave(row.chapter.id, $event)"
+            @drop.stop="draggingVolumeId ? handleDropOnVolume(row.group.volume.id, $event) : handleChapterDrop(row.chapter.id, $event)"
           >
             <span
               class="chap-grip"
@@ -659,27 +747,31 @@ function handleMenuSelect(key: string | number, chapter: ChapterDraft): void {
               title="拖动排序"
               aria-label="拖动排序"
               @click.stop
-              @dragstart.stop="handleChapterDragStart(chapter.id, $event)"
+              @dragstart.stop="handleChapterDragStart(row.chapter.id, $event)"
               @dragend.stop="resetChapterDragState"
             >
               <GripVertical :size="13" />
             </span>
             <FileText :size="13" class="chap-icon" />
-            <span class="chap-title">{{ chapter.title }}</span>
-            <n-tag size="tiny" :type="statusType(chapter.status)" :bordered="false">
-              {{ formatStatus(chapter.status) }}
+            <span class="chap-title">{{ row.chapter.title }}</span>
+            <n-tag size="tiny" :type="statusType(row.chapter.status)" :bordered="false">
+              {{ formatStatus(row.chapter.status) }}
             </n-tag>
-            <n-dropdown :options="chapterMenuOptions" placement="bottom-end" @select="(k) => handleMenuSelect(k, chapter)">
+            <n-dropdown :options="chapterMenuOptions" placement="bottom-end" @select="(k) => handleMenuSelect(k, row.chapter)">
               <span class="chap-more" @click.stop>
                 <MoreVertical :size="12" />
               </span>
             </n-dropdown>
           </button>
-          <button class="chapter-add" @click="openCreateDialog(group.volume.id)">
+        </div>
+
+        <div v-else class="chapter-list virtual-tree-row">
+          <button class="chapter-add" @click="openCreateDialog(row.group.volume.id)">
             <Plus :size="12" /> 新增章节
           </button>
         </div>
-      </section>
+      </template>
+      <div :style="{ height: virtualTreeWindow.bottom + 'px' }" aria-hidden="true" />
     </div>
 
     <footer class="ts-footer">
@@ -868,12 +960,19 @@ function handleMenuSelect(key: string | number, chapter: ChapterDraft): void {
 .ts-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 0 12px;
+  padding: 4px 0;
+  contain: strict;
+}
+
+.virtual-tree-row {
+  height: 40px;
+  min-height: 40px;
+  box-sizing: border-box;
 }
 
 .volume {
   position: relative;
-  margin-bottom: 2px;
+  margin-bottom: 0;
 }
 
 .volume-head {
@@ -889,6 +988,7 @@ function handleMenuSelect(key: string | number, chapter: ChapterDraft): void {
   font-weight: 600;
   color: var(--arc-text-secondary);
   letter-spacing: 0.04em;
+  height: 40px;
 }
 
 .volume-head:hover {
@@ -1024,6 +1124,8 @@ function handleMenuSelect(key: string | number, chapter: ChapterDraft): void {
   border-left: 2px solid transparent;
   text-align: left;
   transition: background 0.15s ease;
+  width: 100%;
+  height: 40px;
 }
 
 .chapter-row:hover {
@@ -1130,6 +1232,8 @@ function handleMenuSelect(key: string | number, chapter: ChapterDraft): void {
   font-size: 12px;
   color: var(--arc-text-hint);
   cursor: pointer;
+  width: 100%;
+  height: 40px;
 }
 
 .chapter-add:hover {

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, h, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Check, ChevronDown, ChevronRight, Folder, FocusIcon, History, Maximize2, Menu, MessageSquareQuote, Minus, Minimize2, Plus, RefreshCw, Sparkles, Type, Wand2 } from 'lucide-vue-next'
-import { NAlert, NDropdown, NTag, NTooltip } from 'naive-ui'
+import { Check, ChevronDown, ChevronRight, Folder, FocusIcon, History, Maximize2, Menu, MessageSquareQuote, Minus, Minimize2, Plus, RefreshCw, ShieldAlert, Sparkles, Type, Wand2 } from 'lucide-vue-next'
+import { NAlert, NDropdown, NTag, NTooltip, useMessage } from 'naive-ui'
 import type { DropdownOption } from 'naive-ui'
 import SimpleChapterEditor from './SimpleChapterEditor.vue'
+import type { ChapterRecoverySnapshot } from './SimpleChapterEditor.vue'
 import ChapterVersionDialog from './ChapterVersionDialog.vue'
 import EditorFindBar from './EditorFindBar.vue'
 import EditorContextMenu from './EditorContextMenu.vue'
@@ -28,6 +29,7 @@ const emit = defineEmits<{
 }>()
 
 const appStore = useAppStore()
+const message = useMessage()
 
 const FONT_LEVELS = [14, 15, 16, 17, 18, 20, 22]
 const fontIdx = ref(3)
@@ -131,6 +133,7 @@ const editorRef = ref<InstanceType<typeof SimpleChapterEditor> | null>(null)
 const findBarRef = ref<InstanceType<typeof EditorFindBar> | null>(null)
 const findBarVisible = ref(false)
 const findInitialTerm = ref('')
+const recoverySnapshot = ref<ChapterRecoverySnapshot | null>(null)
 // editorRef.value.editor 通过模板 ref 自动 unwrap 为 Editor | undefined
 const tiptapEditor = computed(() => (editorRef.value as any)?.editor ?? null)
 
@@ -276,7 +279,8 @@ function handleMouseDown(e: MouseEvent): void {
 }
 
 function handleGlobalKeydown(e: KeyboardEvent): void {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+  const commandKey = e.ctrlKey || e.metaKey
+  if (commandKey && e.key.toLowerCase() === 'f') {
     const scrollEl = scrollRef.value
     if (!scrollEl) return
     // 仅当焦点在当前编辑器区域内时才拦截
@@ -285,7 +289,38 @@ function handleGlobalKeydown(e: KeyboardEvent): void {
     if (!inEditor) return
     e.preventDefault()
     openFindBar()
+    return
   }
+  if (commandKey && e.altKey && e.key.toLowerCase() === 'a') {
+    e.preventDefault()
+    emit('toggleAi')
+    return
+  }
+  if (commandKey && e.key.toLowerCase() === 's') {
+    e.preventDefault()
+    if (e.shiftKey) {
+      void appStore.saveCurrentChapterVersion().then((result) => {
+        if (result.success) message.success('已保存当前章节版本')
+        else message.error(result.error ?? '保存版本失败')
+      })
+    } else {
+      void appStore.persistWorkspace().then(() => {
+        if (appStore.persistenceError) message.error(appStore.persistenceError)
+        else message.success('工作区已保存')
+      })
+    }
+  }
+}
+
+function restoreRecovery(): void {
+  editorRef.value?.restoreRecovery()
+  recoverySnapshot.value = null
+  message.success('已恢复异常退出前的本地草稿')
+}
+
+function discardRecovery(): void {
+  editorRef.value?.discardRecovery()
+  recoverySnapshot.value = null
 }
 
 onMounted(() => {
@@ -407,6 +442,16 @@ onBeforeUnmount(() => {
             </ul>
           </n-alert>
 
+          <div v-if="recoverySnapshot" class="recovery-banner">
+            <ShieldAlert :size="16" />
+            <div class="recovery-copy">
+              <strong>发现未同步的本地草稿</strong>
+              <span>保存于 {{ new Date(recoverySnapshot.savedAt).toLocaleString('zh-CN') }}</span>
+            </div>
+            <button type="button" @click="discardRecovery">忽略</button>
+            <button type="button" class="primary" @click="restoreRecovery">恢复草稿</button>
+          </div>
+
           <SimpleChapterEditor
             ref="editorRef"
             class="ep-editor"
@@ -414,9 +459,10 @@ onBeforeUnmount(() => {
             :chapter-id="currentChapter.id"
             :model-value="currentChapter.content ?? ''"
             :insertion-request="appStore.pendingChapterInsertion"
-            @update:model-value="appStore.updateChapterContent"
+            @update:model-value="(value, chapterId) => appStore.updateChapterContent(value, chapterId)"
             @consume-insertion="appStore.consumeChapterInsertion"
             @selection-change="appStore.updateChapterSelection"
+            @recovery-available="recoverySnapshot = $event"
           />
         </template>
       </div>
@@ -497,6 +543,53 @@ onBeforeUnmount(() => {
   background: var(--arc-bg-body);
   overflow: hidden;
   position: relative;
+}
+
+.recovery-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 18px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--arc-warning) 34%, var(--arc-border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--arc-warning) 6%, var(--arc-bg-surface));
+  color: var(--arc-warning);
+}
+
+.recovery-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.recovery-copy strong {
+  color: var(--arc-text-primary);
+  font-size: 12px;
+}
+
+.recovery-copy span {
+  color: var(--arc-text-hint);
+  font-size: 11px;
+}
+
+.recovery-banner button {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--arc-border);
+  border-radius: 5px;
+  background: var(--arc-bg-surface);
+  color: var(--arc-text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.recovery-banner button.primary {
+  border-color: var(--arc-primary);
+  background: var(--arc-primary);
+  color: white;
 }
 
 .ep-header {

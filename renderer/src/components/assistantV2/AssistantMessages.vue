@@ -2,7 +2,18 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { Sparkles, SquareTerminal, UserRound } from 'lucide-vue-next'
+import {
+  Brain,
+  CheckCircle2,
+  ChevronRight,
+  CircleAlert,
+  ClipboardCheck,
+  Layers3,
+  SearchCheck,
+  Sparkles,
+  SquareTerminal,
+  UserRound
+} from 'lucide-vue-next'
 import type { AssistantMessageView, AssistantToolCallView } from '@/composables/useAssistant'
 
 const MD_ALLOWED_TAGS = [
@@ -69,6 +80,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'open-knowledge', documentId?: string): void
   (e: 'continue', prompt: string): void
+  (e: 'open-staged'): void
 }>()
 
 const scrollRef = ref<HTMLDivElement | null>(null)
@@ -174,6 +186,28 @@ function commandSummary(calls: AssistantToolCallView[]): string {
   return `已运行 ${calls.length} 条命令`
 }
 
+function commandSectionLabel(calls: AssistantToolCallView[]): string {
+  if (calls.every((call) => isEvidenceTool(call.toolName))) return '读取上下文'
+  if (calls.some((call) => /audit|check|review/i.test(call.toolName))) return '审计检查'
+  if (calls.some((call) => call.toolName.startsWith('stage_'))) return '准备变更'
+  return '工具执行'
+}
+
+function commandSectionIcon(calls: AssistantToolCallView[]) {
+  if (calls.every((call) => isEvidenceTool(call.toolName))) return SearchCheck
+  if (calls.some((call) => /audit|check|review/i.test(call.toolName))) return ClipboardCheck
+  return SquareTerminal
+}
+
+function shouldExpandCommands(calls: AssistantToolCallView[]): boolean {
+  return calls.some((call) => call.status === 'running' || call.status === 'error')
+}
+
+function isActiveReasoningBlock(message: AssistantMessageView, blockId: string): boolean {
+  return message.status === 'streaming'
+    && message.flowBlocks[message.flowBlocks.length - 1]?.id === blockId
+}
+
 const hasContent = computed(() => props.messages.length > 0)
 </script>
 
@@ -198,7 +232,7 @@ const hasContent = computed(() => props.messages.length > 0)
     <div v-else-if="!hasContent" class="empty">
       <div class="title">开始一段对话</div>
       <div class="hint">
-        {{ props.isStreaming ? '正在思考…' : '试试问："介绍项目里的第一个人物" 或"帮我优化第一章的开头"' }}
+        {{ props.isStreaming ? '正在处理请求…' : '试试问："介绍项目里的第一个人物" 或"帮我优化第一章的开头"' }}
       </div>
     </div>
 
@@ -221,21 +255,33 @@ const hasContent = computed(() => props.messages.length > 0)
             <Sparkles :size="12" :stroke-width="2" />
           </span>
           <span class="assistant-name">{{ props.assistantName ?? '全局助手' }}</span>
-          <span v-if="msg.status === 'streaming'" class="assistant-state">生成中</span>
+          <span v-if="msg.status === 'streaming'" class="assistant-state">{{ msg.activityText || '处理中' }}</span>
         </div>
 
       <template v-if="msg.flowBlocks.length > 0">
         <template v-for="block in msg.flowBlocks" :key="block.id">
-          <div
+          <details
             v-if="block.kind === 'reasoning'"
-            class="assistant-copy reasoning-copy markdown-body"
-            v-html="renderMarkdown(block.content)"
-          />
+            class="message-section reasoning-section"
+            :open="isActiveReasoningBlock(msg, block.id)"
+          >
+            <summary class="section-summary">
+              <Brain :size="14" />
+              <span>分析过程</span>
+              <em>{{ isActiveReasoningBlock(msg, block.id) ? '进行中' : '已完成' }}</em>
+            </summary>
+            <div class="section-body assistant-copy reasoning-copy markdown-body" v-html="renderMarkdown(block.content)" />
+          </details>
 
-          <details v-else-if="block.kind === 'commands'" class="command-block">
-            <summary class="command-summary">
-              <SquareTerminal class="summary-icon" :size="15" :stroke-width="1.75" />
-              <span>{{ commandSummary(block.commands) }}</span>
+          <details
+            v-else-if="block.kind === 'commands'"
+            class="message-section command-block"
+            :open="shouldExpandCommands(block.commands)"
+          >
+            <summary class="section-summary command-summary">
+              <component :is="commandSectionIcon(block.commands)" class="summary-icon" :size="15" :stroke-width="1.75" />
+              <span>{{ commandSectionLabel(block.commands) }}</span>
+              <em>{{ commandSummary(block.commands) }}</em>
             </summary>
 
             <div class="command-details">
@@ -271,13 +317,33 @@ const hasContent = computed(() => props.messages.length > 0)
             </div>
           </details>
 
-          <div
-            v-else
-            class="assistant-copy markdown-body"
+          <button
+            v-else-if="block.kind === 'staged'"
+            type="button"
+            class="staged-block"
+            @click="emit('open-staged')"
           >
-            <div v-html="renderMarkdown(block.content)" />
-            <span v-if="msg.status === 'streaming' && block.id === msg.flowBlocks[msg.flowBlocks.length - 1]?.id" class="cursor">▍</span>
-          </div>
+            <span class="staged-icon"><Layers3 :size="15" /></span>
+            <span class="staged-copy">
+              <strong>已生成 {{ block.changeIds.length }} 项暂存变更</strong>
+              <small>正文或项目数据尚未写回，等待你的确认</small>
+            </span>
+            <ChevronRight :size="15" />
+          </button>
+
+          <section
+            v-else
+            class="message-section result-section"
+          >
+            <header class="result-head">
+              <CheckCircle2 :size="14" />
+              <span>{{ msg.toolCalls.some((call) => /audit|check|review/i.test(call.toolName)) ? '审计结果' : '助手回复' }}</span>
+            </header>
+            <div class="section-body assistant-copy markdown-body">
+              <div v-html="renderMarkdown(block.content)" />
+              <span v-if="msg.status === 'streaming' && block.id === msg.flowBlocks[msg.flowBlocks.length - 1]?.id" class="cursor">▍</span>
+            </div>
+          </section>
         </template>
       </template>
       <div v-else-if="msg.status === 'streaming'" class="assistant-copy thinking-copy">
@@ -287,8 +353,11 @@ const hasContent = computed(() => props.messages.length > 0)
       </div>
 
       <div v-if="msg.error" class="error-block">
-        <div class="error-title">出错了</div>
-        <div class="error-body">{{ msg.error }}</div>
+        <CircleAlert :size="15" />
+        <div>
+          <div class="error-title">失败原因</div>
+          <div class="error-body">{{ msg.error }}</div>
+        </div>
       </div>
 
       <div v-if="msg.status === 'canceled'" class="status-tag">已取消</div>
@@ -434,6 +503,53 @@ const hasContent = computed(() => props.messages.length > 0)
   gap: 12px;
   min-width: 0;
 }
+.message-section {
+  min-width: 0;
+  border: 1px solid var(--arc-border);
+  border-radius: 6px;
+  background: var(--arc-bg-surface);
+  overflow: hidden;
+}
+.section-summary {
+  min-height: 36px;
+  padding: 0 11px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--arc-text-secondary);
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  font-weight: 600;
+}
+.section-summary::-webkit-details-marker { display: none; }
+.section-summary::marker { content: ''; }
+.section-summary em {
+  color: var(--arc-text-hint);
+  font-family: var(--v2-mono);
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 400;
+}
+.section-body {
+  padding: 11px 12px 13px;
+  border-top: 1px solid var(--arc-border);
+}
+.result-section {
+  border-color: color-mix(in srgb, var(--arc-primary) 22%, var(--arc-border));
+}
+.result-head {
+  min-height: 34px;
+  padding: 0 11px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--arc-primary);
+  font-size: 12px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--arc-primary) 5%, var(--arc-bg-surface));
+}
 .assistant-head {
   display: inline-flex;
   align-items: center;
@@ -489,8 +605,6 @@ const hasContent = computed(() => props.messages.length > 0)
   30% { opacity: 1; transform: translateY(-2px); }
 }
 .reasoning-copy {
-  padding-left: 12px;
-  border-left: 2px solid var(--arc-border-strong);
   color: var(--arc-text-secondary);
   font-size: 14px;
   line-height: 1.75;
@@ -583,15 +697,7 @@ const hasContent = computed(() => props.messages.length > 0)
   display: block;
 }
 .command-summary {
-  width: fit-content;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--arc-text-hint);
-  cursor: pointer;
-  font-size: 13px;
-  line-height: 1.45;
-  list-style: none;
+  width: 100%;
   user-select: none;
 }
 .command-summary::-webkit-details-marker,
@@ -610,10 +716,54 @@ const hasContent = computed(() => props.messages.length > 0)
   color: currentColor;
 }
 .command-details {
-  margin: 10px 0 0 26px;
+  margin: 0;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--arc-border);
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+.staged-block {
+  width: 100%;
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 11px;
+  border: 1px solid color-mix(in srgb, var(--arc-warning) 32%, var(--arc-border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--arc-warning) 5%, var(--arc-bg-surface));
+  color: var(--arc-text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.staged-block:hover {
+  border-color: var(--arc-warning);
+  background: color-mix(in srgb, var(--arc-warning) 8%, var(--arc-bg-surface));
+}
+.staged-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--arc-warning) 13%, var(--arc-bg-surface));
+  color: var(--arc-warning);
+}
+.staged-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.staged-copy strong {
+  color: var(--arc-text-primary);
+  font-size: 12.5px;
+}
+.staged-copy small {
+  color: var(--arc-text-hint);
+  font-size: 11px;
 }
 .command-item {
   min-width: 0;
@@ -695,8 +845,14 @@ const hasContent = computed(() => props.messages.length > 0)
   word-break: break-word;
 }
 .error-block {
-  padding-left: 10px;
-  border-left: 2px solid var(--v2-danger);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--v2-danger) 30%, var(--arc-border));
+  border-radius: 6px;
+  background: var(--v2-danger-soft);
+  color: var(--v2-danger);
   font-size: 13px;
 }
 .error-title {

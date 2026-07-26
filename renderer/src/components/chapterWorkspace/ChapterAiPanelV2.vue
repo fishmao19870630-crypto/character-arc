@@ -294,6 +294,7 @@ defineExpose({ sendPrompt, sendPromptWithAction, triggerDraft })
         :is-initializing="assistant.isInitializing.value"
         assistant-name="创作助理"
         @continue="assistant.continueWithPrompt"
+        @open-staged="activeTab = 'staged'"
       />
 
       <div v-else class="starter">

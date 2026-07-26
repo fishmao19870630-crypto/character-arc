@@ -44,6 +44,11 @@ export type AssistantMessageBlock =
       kind: 'commands'
       commands: AssistantToolCallView[]
     }
+  | {
+      id: string
+      kind: 'staged'
+      changeIds: string[]
+    }
 
 export interface AssistantMessageView {
   turnId: string
@@ -60,6 +65,7 @@ export interface AssistantMessageView {
   }
   status: 'streaming' | 'done' | 'canceled' | 'error'
   error?: string
+  activityText?: string
   createdAt: string
 }
 
@@ -138,6 +144,7 @@ export function useAssistant(options: UseAssistantOptions) {
     stagedChangeIds: string[]
     resumable?: AssistantMessageView['resumable']
     finalError?: string
+    activityText?: string
   } {
     let assistantMessage = ''
     let reasoning = ''
@@ -147,6 +154,7 @@ export function useAssistant(options: UseAssistantOptions) {
     const stagedChangeIds: string[] = []
     let resumable: AssistantMessageView['resumable']
     let finalError: string | undefined
+    let activityText: string | undefined
     let forceNewCommandBlock = false
 
     function appendTextBlock(kind: 'reasoning' | 'assistant', seq: number, delta: string): void {
@@ -176,6 +184,23 @@ export function useAssistant(options: UseAssistantOptions) {
         commands: [call]
       })
       forceNewCommandBlock = false
+    }
+
+    function appendStaged(changeId: string, seq: number): void {
+      const last = flowBlocks[flowBlocks.length - 1]
+      if (last?.kind === 'staged') {
+        if (!last.changeIds.includes(changeId)) last.changeIds.push(changeId)
+        return
+      }
+      flowBlocks.push({ id: `staged-${seq}`, kind: 'staged', changeIds: [changeId] })
+    }
+
+    function normalizeActivity(message: string): string {
+      const normalized = message.trim()
+      if (/整理最终答案/.test(normalized)) return '整理回复'
+      if (/第\s*\d+\s*轮推理/.test(normalized)) return '核对资料与工具结果'
+      if (/思考|分析/.test(normalized)) return '分析请求'
+      return normalized.replace(/[.。…]+$/, '') || '处理中'
     }
 
     for (const evt of events) {
@@ -210,7 +235,8 @@ export function useAssistant(options: UseAssistantOptions) {
           break
         }
         case 'staged_change':
-          stagedChangeIds.push(evt.changeId)
+          if (!stagedChangeIds.includes(evt.changeId)) stagedChangeIds.push(evt.changeId)
+          appendStaged(evt.changeId, evt.seq)
           break
         case 'resumable':
           resumable = {
@@ -222,6 +248,7 @@ export function useAssistant(options: UseAssistantOptions) {
         case 'agent_status': {
           const last = flowBlocks[flowBlocks.length - 1]
           if (last?.kind === 'commands') forceNewCommandBlock = true
+          activityText = normalizeActivity(evt.message)
           break
         }
         case 'done':
@@ -238,7 +265,7 @@ export function useAssistant(options: UseAssistantOptions) {
       }
     }
 
-    return { assistantMessage, reasoning, toolCalls, flowBlocks, stagedChangeIds, resumable, finalError }
+    return { assistantMessage, reasoning, toolCalls, flowBlocks, stagedChangeIds, resumable, finalError, activityText }
   }
 
   const messages = computed<AssistantMessageView[]>(() => {
@@ -246,6 +273,9 @@ export function useAssistant(options: UseAssistantOptions) {
       const events = eventsByTurn.value.get(turn.id) ?? []
       const folded = foldTurnEvents(events)
       const assistantMessage = folded.assistantMessage || turn.assistantMessage
+      const status = turn.status === 'streaming' && streamingTurnId.value !== turn.id
+        ? 'canceled'
+        : turn.status
       const flowBlocks = folded.flowBlocks.length > 0
         ? folded.flowBlocks
         : assistantMessage
@@ -260,8 +290,9 @@ export function useAssistant(options: UseAssistantOptions) {
         flowBlocks,
         stagedChangeIds: folded.stagedChangeIds,
         resumable: folded.resumable,
-        status: turn.status,
+        status,
         error: folded.finalError,
+        activityText: status === 'streaming' ? folded.activityText : undefined,
         createdAt: turn.createdAt
       }
     })

@@ -347,6 +347,7 @@ async function handleCommit(ids?: string[]): Promise<void> {
         :is-streaming="assistant.isStreaming.value"
         @open-knowledge="openKnowledgeDocument"
         @continue="assistant.continueWithPrompt"
+        @open-staged="reopenStagePanel"
       />
 
       <div v-else class="starter">

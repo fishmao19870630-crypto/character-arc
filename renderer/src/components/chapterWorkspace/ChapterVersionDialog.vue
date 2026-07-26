@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { GitCompare, RotateCcw } from 'lucide-vue-next'
 import { NButton, NModal, useDialog, useMessage } from 'naive-ui'
-import { getChapterCharacterCount, getChapterPreviewText } from '@/features/chapters/editorContent'
+import { getChapterCharacterCount, getPlainTextFromEditorContent } from '@/features/chapters/editorContent'
 import { formatChapterWordTargetLabel } from '@/features/chapters/wordTarget'
 import { useAppStore } from '@/stores/app'
 import type { ChapterDraft, ChapterVersion } from '@/types/app'
@@ -18,10 +19,71 @@ const emit = defineEmits<{
 const appStore = useAppStore()
 const dialog = useDialog()
 const message = useMessage()
+const selectedVersionId = ref('')
 
 const versions = computed<ChapterVersion[]>(() =>
   props.chapter ? appStore.getChapterVersions(props.chapter.id) : []
 )
+
+const selectedVersion = computed(() =>
+  versions.value.find((version) => version.id === selectedVersionId.value) ?? versions.value[0] ?? null
+)
+
+type CompareRow = {
+  id: string
+  before: string
+  after: string
+  state: 'same' | 'removed' | 'added'
+}
+
+function splitParagraphs(content: string): string[] {
+  return getPlainTextFromEditorContent(content)
+    .replace(/\r\n/g, '\n')
+    .split(/\n+/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+}
+
+function buildCompareRows(beforeContent: string, afterContent: string): CompareRow[] {
+  const before = splitParagraphs(beforeContent)
+  const after = splitParagraphs(afterContent)
+  const lcs = Array.from({ length: before.length + 1 }, () => new Array<number>(after.length + 1).fill(0))
+  for (let i = before.length - 1; i >= 0; i--) {
+    for (let j = after.length - 1; j >= 0; j--) {
+      lcs[i][j] = before[i] === after[j]
+        ? lcs[i + 1][j + 1] + 1
+        : Math.max(lcs[i + 1][j], lcs[i][j + 1])
+    }
+  }
+
+  const rows: CompareRow[] = []
+  let i = 0
+  let j = 0
+  while (i < before.length || j < after.length) {
+    if (i < before.length && j < after.length && before[i] === after[j]) {
+      rows.push({ id: `same-${i}-${j}`, before: before[i], after: after[j], state: 'same' })
+      i += 1
+      j += 1
+    } else if (i < before.length && (j >= after.length || lcs[i + 1][j] >= lcs[i][j + 1])) {
+      rows.push({ id: `removed-${i}-${j}`, before: before[i], after: '', state: 'removed' })
+      i += 1
+    } else {
+      rows.push({ id: `added-${i}-${j}`, before: '', after: after[j], state: 'added' })
+      j += 1
+    }
+  }
+  return rows
+}
+
+const compareRows = computed(() => {
+  if (!selectedVersion.value || !props.chapter) return []
+  return buildCompareRows(selectedVersion.value.content, props.chapter.content)
+})
+
+const compareStats = computed(() => ({
+  added: compareRows.value.filter((row) => row.state === 'added').length,
+  removed: compareRows.value.filter((row) => row.state === 'removed').length
+}))
 
 const STATUS_LABELS: Record<ChapterDraft['status'], string> = {
   draft: '草稿中',
@@ -78,6 +140,17 @@ function restore(version: ChapterVersion): void {
     }
   })
 }
+
+watch(
+  [() => props.show, versions],
+  ([show, list]) => {
+    if (!show) return
+    if (!list.some((version) => version.id === selectedVersionId.value)) {
+      selectedVersionId.value = list[0]?.id ?? ''
+    }
+  },
+  { immediate: true }
+)
 </script>
 
 <template>
@@ -85,7 +158,7 @@ function restore(version: ChapterVersion): void {
     :show="show"
     preset="card"
     title="章节历史版本"
-    :style="{ width: 'min(640px, 92vw)' }"
+    :style="{ width: 'min(1080px, 94vw)' }"
     :bordered="false"
     @update:show="(v) => emit('update:show', v)"
   >
@@ -93,27 +166,64 @@ function restore(version: ChapterVersion): void {
       <n-button size="small" type="primary" secondary @click="saveVersion">保存当前版本</n-button>
     </template>
 
-    <div v-if="versions.length" class="version-list arc-scrollbar">
-      <article v-for="version in versions" :key="version.id" class="version-card">
-        <div class="head">
-          <div>
+    <div v-if="versions.length" class="version-workspace">
+      <aside class="version-list arc-scrollbar">
+        <button
+          v-for="version in versions"
+          :key="version.id"
+          type="button"
+          class="version-item"
+          :class="{ active: selectedVersion?.id === version.id }"
+          @click="selectedVersionId = version.id"
+        >
+          <div class="version-item-head">
             <strong>{{ formatTime(version.createdAt) }}</strong>
-            <p class="version-title">{{ version.title }}</p>
+            <span>{{ getChapterCharacterCount(version.content).toLocaleString() }} 字</span>
           </div>
-          <n-button type="primary" secondary round @click="restore(version)">恢复此版本</n-button>
+          <span class="version-title">{{ version.title }}</span>
+          <div class="meta">
+            <span class="chip" :class="statusChipClass(version.status)">
+              {{ STATUS_LABELS[version.status] ?? '草稿中' }}
+            </span>
+            <span class="chip neutral">{{ formatChapterWordTargetLabel(version.wordTarget) }}</span>
+          </div>
+        </button>
+      </aside>
+
+      <section v-if="selectedVersion" class="compare-pane">
+        <header class="compare-head">
+          <div class="compare-title">
+            <GitCompare :size="16" />
+            <div>
+              <strong>版本差异</strong>
+              <span>历史快照对照当前稿</span>
+            </div>
+          </div>
+          <div class="compare-actions">
+            <span class="diff-stat removed">-{{ compareStats.removed }}</span>
+            <span class="diff-stat added">+{{ compareStats.added }}</span>
+            <n-button size="small" secondary @click="restore(selectedVersion)">
+              <template #icon><RotateCcw :size="14" /></template>
+              恢复此版本
+            </n-button>
+          </div>
+        </header>
+
+        <div class="compare-labels">
+          <span>{{ formatTime(selectedVersion.createdAt) }} · 历史版本</span>
+          <span>当前编辑稿</span>
         </div>
 
-        <div class="meta">
-          <span class="chip" :class="statusChipClass(version.status)">
-            {{ STATUS_LABELS[version.status] ?? '草稿中' }}
-          </span>
-          <span class="chip neutral">{{ formatChapterWordTargetLabel(version.wordTarget) }}</span>
-          <span class="words">{{ getChapterCharacterCount(version.content) }} 字</span>
+        <div class="compare-scroll arc-scrollbar">
+          <div v-if="compareRows.length" class="compare-rows">
+            <div v-for="row in compareRows" :key="row.id" class="compare-row" :class="row.state">
+              <p :class="{ empty: !row.before }">{{ row.before || ' ' }}</p>
+              <p :class="{ empty: !row.after }">{{ row.after || ' ' }}</p>
+            </div>
+          </div>
+          <div v-else class="compare-empty">当前稿与该历史版本没有正文差异。</div>
         </div>
-
-        <p v-if="version.summary" class="summary">{{ version.summary }}</p>
-        <p class="preview">{{ getChapterPreviewText(version.content, '该版本暂无正文内容。').slice(0, 120) }}</p>
-      </article>
+      </section>
     </div>
     <div v-else class="empty">
       当前章节还没有历史版本，点击右上角「保存当前版本」后会在这里看到快照。
@@ -125,37 +235,66 @@ function restore(version: ChapterVersion): void {
 .version-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  max-height: 60vh;
+  gap: 2px;
+  min-width: 0;
   overflow-y: auto;
+  padding-right: 8px;
+  border-right: 1px solid var(--arc-border);
 }
 
-.version-card {
-  border: 1px solid var(--arc-border);
-  border-radius: var(--arc-radius-md);
-  background: var(--arc-bg-surface);
-  padding: 14px 16px;
+.version-workspace {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  height: min(68vh, 720px);
+  min-height: 420px;
+}
+
+.version-item {
+  width: 100%;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  padding: 11px 10px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-}
-
-.head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.head strong {
-  font-size: 14px;
+  gap: 7px;
+  text-align: left;
+  cursor: pointer;
   color: var(--arc-text-primary);
 }
 
+.version-item:hover {
+  background: var(--arc-bg-surface-hover);
+}
+
+.version-item.active {
+  border-left-color: var(--arc-primary);
+  background: var(--arc-primary-soft);
+}
+
+.version-item-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.version-item-head strong {
+  font-size: 12px;
+  color: var(--arc-text-primary);
+}
+
+.version-item-head span {
+  font-size: 10px;
+  color: var(--arc-text-hint);
+}
+
 .version-title {
-  margin: 4px 0 0;
   font-size: 12px;
   color: var(--arc-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .meta {
@@ -177,22 +316,116 @@ function restore(version: ChapterVersion): void {
 .chip.warning { background: color-mix(in srgb, var(--arc-warning) 14%, var(--arc-bg-surface)); color: var(--arc-warning); }
 .chip.accent { background: var(--arc-primary-soft); color: var(--arc-primary); }
 
-.words {
+.compare-pane {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.compare-head {
+  min-height: 48px;
+  padding: 0 0 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.compare-title,
+.compare-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.compare-title {
+  color: var(--arc-primary);
+}
+
+.compare-title div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.compare-title strong {
+  font-size: 13px;
+  color: var(--arc-text-primary);
+}
+
+.compare-title span {
   font-size: 11px;
   color: var(--arc-text-hint);
 }
 
-.summary,
-.preview {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.6;
+.diff-stat {
+  min-width: 28px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+}
+
+.diff-stat.added { color: var(--arc-success); }
+.diff-stat.removed { color: var(--arc-danger); }
+
+.compare-labels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin-left: 14px;
+  border: 1px solid var(--arc-border);
+  border-bottom: 0;
+  background: var(--arc-bg-weak);
+}
+
+.compare-labels span {
+  padding: 7px 12px;
+  font-size: 11px;
+  font-weight: 600;
   color: var(--arc-text-secondary);
+}
+
+.compare-labels span + span {
+  border-left: 1px solid var(--arc-border);
+}
+
+.compare-scroll {
+  margin-left: 14px;
+  overflow: auto;
+  border: 1px solid var(--arc-border);
+  background: var(--arc-bg-surface);
+}
+
+.compare-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--arc-border);
+}
+
+.compare-row:last-child { border-bottom: 0; }
+
+.compare-row p {
+  margin: 0;
+  min-width: 0;
+  padding: 9px 12px;
+  color: var(--arc-text-secondary);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
   user-select: text;
 }
 
-.preview {
+.compare-row p + p { border-left: 1px solid var(--arc-border); }
+.compare-row.removed p:first-child { background: color-mix(in srgb, var(--arc-danger) 8%, var(--arc-bg-surface)); }
+.compare-row.added p:last-child { background: color-mix(in srgb, var(--arc-success) 9%, var(--arc-bg-surface)); }
+.compare-row p.empty { background: var(--arc-bg-weak); }
+
+.compare-empty {
+  display: grid;
+  place-items: center;
+  min-height: 100%;
   color: var(--arc-text-hint);
+  font-size: 12px;
 }
 
 .empty {
@@ -200,5 +433,24 @@ function restore(version: ChapterVersion): void {
   text-align: center;
   color: var(--arc-text-hint);
   font-size: 13px;
+}
+
+@media (max-width: 780px) {
+  .version-workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: 150px minmax(0, 1fr);
+  }
+
+  .version-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--arc-border);
+    padding: 0 0 8px;
+  }
+
+  .compare-head,
+  .compare-labels,
+  .compare-scroll {
+    margin-left: 0;
+  }
 }
 </style>
