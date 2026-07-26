@@ -270,11 +270,12 @@ export class StagedChangesStore {
     }
   }
 
-  /** 内部状态迁移 + 发事件 + 更新 updatedAt。 */
-  private transition(id: string, mut: (c: StagedChange) => void): StagedChange | null {
+  /** 内部状态迁移 + 发事件 + 更新 updatedAt。mut 返回 false 时视为无变化。 */
+  private transition(id: string, mut: (c: StagedChange) => boolean): StagedChange | null {
     const change = this.items.get(id)
     if (!change) return null
-    mut(change)
+    const changed = mut(change)
+    if (!changed) return null
     change.updatedAt = new Date().toISOString()
     this.persist(change)
     this.emit({ type: 'updated', change })
@@ -284,14 +285,19 @@ export class StagedChangesStore {
   /** streaming → pending。工具 finalize 时调用。 */
   finalize(id: string): StagedChange | null {
     return this.transition(id, (c) => {
-      if (c.status === 'streaming') c.status = 'pending'
+      if (c.status !== 'streaming') return false
+      c.status = 'pending'
+      return true
     })
   }
 
   /** 更新 pending 变更的目标绑定（用户在 UI 中手动指定 entityId）。 */
   bindTarget(id: string, entityId: string): StagedChange | null {
     return this.transition(id, (c) => {
+      if (c.status === 'committed') return false
+      if (c.entityId === entityId) return false
       c.entityId = entityId
+      return true
     })
   }
 
@@ -300,9 +306,11 @@ export class StagedChangesStore {
     const changed: StagedChange[] = []
     for (const id of ids) {
       const c = this.transition(id, (c) => {
-        if (c.status === 'pending' || c.status === 'rejected') c.status = 'accepted'
+        if (c.status !== 'pending' && c.status !== 'rejected') return false
+        c.status = 'accepted'
+        return true
       })
-      if (c && c.status === 'accepted') changed.push(c)
+      if (c) changed.push(c)
     }
     return changed
   }
@@ -312,7 +320,9 @@ export class StagedChangesStore {
     const changed: StagedChange[] = []
     for (const id of ids) {
       const c = this.transition(id, (c) => {
-        if (c.status === 'pending' || c.status === 'accepted') c.status = 'rejected'
+        if (c.status !== 'pending' && c.status !== 'accepted') return false
+        c.status = 'rejected'
+        return true
       })
       if (c) changed.push(c)
     }
@@ -347,6 +357,7 @@ export class StagedChangesStore {
         this.transition(change.id, (c) => {
           c.status = 'committed'
           if (result.entityId) c.entityId = result.entityId
+          return true
         })
       }
     }

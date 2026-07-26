@@ -114,6 +114,14 @@ contextBridge.exposeInMainWorld('characterArc', {
       ipcRenderer.removeListener('characterarc:chapter-post-generation-issues', listener)
     }
   },
+  /** 监听章节生成后处理后台任务生命周期 */
+  onChapterPostGenerationTask: (callback: (payload: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload)
+    ipcRenderer.on('characterarc:chapter-post-generation-task', listener)
+    return () => {
+      ipcRenderer.removeListener('characterarc:chapter-post-generation-task', listener)
+    }
+  },
   /** 测试 AI 连接是否通畅，发送探测请求验证鉴权和网络 */
   testAiConnection: (settings: unknown) => ipcRenderer.invoke('characterarc:ai-test-connection', toIpcPayload(settings)),
   /** 获取 AI 供应商的可用模型列表 */

@@ -443,7 +443,11 @@ function registerStageHandlers(): void {
     async (_event, payload: StageCommitRequest) => {
       await getConversation()
       const committer = requireDep('commitChange')
+      if ((!payload.changeIds || payload.changeIds.length === 0) && !payload.sessionId) {
+        throw new Error('stage commit requires sessionId when changeIds is omitted')
+      }
       return stagedChangesStore.commit(committer, {
+        sessionId: payload.sessionId,
         changeIds: payload.changeIds
       })
     }

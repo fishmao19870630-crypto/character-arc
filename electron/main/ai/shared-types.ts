@@ -540,3 +540,17 @@ export type ChapterPostGenerationIssuesPayload = {
     detail?: string
   }>
 }
+
+/** 章节生成后处理后台任务的生命周期事件。 */
+export type ChapterPostGenerationTaskPayload = {
+  taskKey: string
+  runId: string
+  projectId: string
+  chapterId: string
+  chapterIndex: number
+  chapterTitle: string
+  stage: 'running' | 'done' | 'error' | 'canceled'
+  startedAt: number
+  finishedAt?: number
+  error?: string
+}

@@ -325,6 +325,10 @@ export interface StageRejectRequest {
 }
 
 export interface StageCommitRequest {
+  /**
+   * 批量提交当前会话的 accepted 变更。changeIds 缺省时必填，避免跨会话提交。
+   */
+  sessionId?: string
   /** 只 commit 已 accepted 的变更；缺省时 commit 所有 accepted。 */
   changeIds?: string[]
 }

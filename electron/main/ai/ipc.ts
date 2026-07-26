@@ -1,10 +1,10 @@
 import { ipcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
-import type { AiTaskPayload, AppSettings, ChapterPostGenerationIssuesPayload, ChapterStateWarningsPayload } from './shared-types'
+import type { AiTaskPayload, AppSettings, ChapterPostGenerationIssuesPayload, ChapterPostGenerationTaskPayload, ChapterStateWarningsPayload } from './shared-types'
 import { runAiTask, streamAiTask, testAiConnection, fetchModels, fetchImageModels, generateImage } from './runtime'
 import { runStreamingAgentTask } from './agent/streaming-orchestrator'
 import { isToolUseNotSupportedError } from './provider'
-import { setChapterPostGenerationIssuesEmitter, setChapterWarningsEmitter } from './runtime/orchestrator'
+import { setChapterPostGenerationIssuesEmitter, setChapterPostGenerationTaskEmitter, setChapterWarningsEmitter } from './runtime/orchestrator'
 import { retrieveKnowledgeContext } from './knowledge-retrieval'
 import { buildRunMeta } from './runtime/run-meta'
 import { backfillProjectStateFromChapters } from './state-backfill'
@@ -27,6 +27,8 @@ type AiIpcDeps = {
   emitChapterStateWarnings: (payload: ChapterStateWarningsPayload) => void
   /** 向 renderer 广播章节生成后处理问题事件 */
   emitChapterPostGenerationIssues: (payload: ChapterPostGenerationIssuesPayload) => void
+  /** 向 renderer 广播章节生成后处理任务生命周期 */
+  emitChapterPostGenerationTask: (payload: ChapterPostGenerationTaskPayload) => void
 }
 
 /** 注入的外部依赖，registerAiIpcHandlers 调用时初始化 */
@@ -53,6 +55,7 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
   deps = injectedDeps
   setChapterWarningsEmitter((payload) => deps?.emitChapterStateWarnings(payload))
   setChapterPostGenerationIssuesEmitter((payload) => deps?.emitChapterPostGenerationIssues(payload))
+  setChapterPostGenerationTaskEmitter((payload) => deps?.emitChapterPostGenerationTask(payload))
 
   // ── 非流式 AI 生成（支持 abort） ──
   ipcMain.handle('characterarc:ai-generate', async (_event, payload: AiTaskPayload) => {

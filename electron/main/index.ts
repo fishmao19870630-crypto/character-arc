@@ -5,6 +5,7 @@ import { join } from 'node:path'
 
 import type {
   ChapterPostGenerationIssuesPayload,
+  ChapterPostGenerationTaskPayload,
   ChapterStateWarningsPayload,
   ReferenceStyleAnalysisResult,
   ReferenceStyleChunkResult
@@ -90,6 +91,10 @@ function emitChapterStateWarnings(payload: ChapterStateWarningsPayload): void {
 
 function emitChapterPostGenerationIssues(payload: ChapterPostGenerationIssuesPayload): void {
   windowManager.broadcastWindowEvent('characterarc:chapter-post-generation-issues', payload)
+}
+
+function emitChapterPostGenerationTask(payload: ChapterPostGenerationTaskPayload): void {
+  windowManager.broadcastWindowEvent('characterarc:chapter-post-generation-task', payload)
 }
 
 function buildImportedReferenceKnowledgeDocuments(
@@ -573,7 +578,8 @@ registerAiIpcHandlers({
   getLatestWorkspaceSnapshot: () => latestWorkspaceSnapshot,
   emitAiRunEvent: emitAiRunEvent as (payload: { projectId: string; meta: Record<string, unknown> }) => void,
   emitChapterStateWarnings,
-  emitChapterPostGenerationIssues
+  emitChapterPostGenerationIssues,
+  emitChapterPostGenerationTask
 })
 
 // ── Assistant Runtime v2（Phase 2）──

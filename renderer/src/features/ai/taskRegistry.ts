@@ -13,7 +13,7 @@
  */
 
 /** AI 任务执行阶段 */
-export type AiTaskRunStage = 'running' | 'done' | 'error'
+export type AiTaskRunStage = 'running' | 'done' | 'error' | 'canceled'
 
 /** 单个正在/刚结束的 AI 任务记录 */
 export interface AiTaskRun {
@@ -37,6 +37,8 @@ export interface AiTaskRun {
   error?: string
   /** 可取消令牌：提供时，进度面板会显示"停止"按钮。 */
   onCancel?: () => void
+  /** 主进程后台任务的运行版本，用于忽略上一轮迟到的终态事件。 */
+  runId?: string
 }
 
 /**
@@ -52,6 +54,7 @@ export type AiTaskKind =
   | 'chapter-draft'
   | 'chapter-summary'
   | 'chapter-assistant'
+  | 'chapter-post-process'
   | 'plot-thread'
   | 'cover'
   | 'reference'
@@ -84,3 +87,52 @@ export const AI_TASK_RETENTION_MS = 4_500
  * 90 秒对大多数任务足够；章节初稿等长任务应在 input 里覆盖为更大值。
  */
 export const AI_TASK_DEFAULT_TIMEOUT_MS = 300_000
+
+export type ExternalAiTaskEvent = {
+  taskKey: string
+  runId: string
+  stage: AiTaskRunStage
+  label: string
+  description?: string
+  startedAt: number
+  finishedAt?: number
+  error?: string
+}
+
+/** 将主进程任务事件归并到注册表；旧 runId 的终态不会覆盖新任务。 */
+export function applyExternalAiTaskEvent(
+  current: ReadonlyMap<string, AiTaskRun>,
+  event: ExternalAiTaskEvent
+): Map<string, AiTaskRun> {
+  const existing = current.get(event.taskKey)
+  if (event.stage !== 'running' && existing?.runId !== event.runId) {
+    return current as Map<string, AiTaskRun>
+  }
+
+  const next = new Map(current)
+  if (event.stage === 'running') {
+    next.set(event.taskKey, {
+      key: event.taskKey,
+      kind: 'chapter-post-process',
+      label: event.label,
+      description: event.description,
+      startedAt: event.startedAt,
+      stage: 'running',
+      runId: event.runId
+    })
+    return next
+  }
+
+  next.set(event.taskKey, {
+    ...existing,
+    key: event.taskKey,
+    kind: existing?.kind ?? 'chapter-post-process',
+    label: existing?.label ?? event.label,
+    startedAt: existing?.startedAt ?? event.startedAt,
+    stage: event.stage,
+    runId: event.runId,
+    finishedAt: event.finishedAt ?? Date.now(),
+    error: event.error
+  })
+  return next
+}

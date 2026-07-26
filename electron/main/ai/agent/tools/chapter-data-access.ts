@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { ensureWorkspaceDb } from '../../../workspace-store'
+import { commitChapterEditInDb } from './chapter-commit'
 
 export type ChapterData = {
   id: string
@@ -419,35 +420,7 @@ export async function commitChapterEdit(
   newContent: string
 ): Promise<{ versionId: string }> {
   const db = await ensureWorkspaceDb()
-
-  const row = db.prepare(
-    'SELECT title, summary, status, word_target FROM chapters WHERE id = ? AND project_id = ?'
-  ).get(chapterId, projectId) as Record<string, unknown> | undefined
-
-  if (!row) {
-    throw new Error(`Chapter not found: ${chapterId}`)
-  }
-
-  const versionId = randomUUID()
-  db.prepare(`
-    INSERT INTO chapter_versions (id, project_id, chapter_id, title, summary, status, word_target, content, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    versionId,
-    projectId,
-    chapterId,
-    String(row.title),
-    String(row.summary),
-    String(row.status),
-    String(row.word_target),
-    oldContent,
-    new Date().toISOString()
-  )
-
-  db.prepare('UPDATE chapters SET content = ? WHERE id = ? AND project_id = ?')
-    .run(newContent, chapterId, projectId)
-
-  return { versionId }
+  return commitChapterEditInDb(db, projectId, chapterId, oldContent, newContent)
 }
 
 export async function searchProjectData(

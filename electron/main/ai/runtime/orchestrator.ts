@@ -7,6 +7,7 @@ import type {
   AppSettings,
   AiStreamHandlers,
   ChapterPostGenerationIssuesPayload,
+  ChapterPostGenerationTaskPayload,
   ChapterStateWarningsPayload
 } from '../shared-types'
 import { normalizeSettings, validateSettings, resolveMaxTokens, applyReasoningSafeFloor, shouldOmitMaxTokens, AGENT_TASK_WHITELIST } from '../settings'
@@ -28,6 +29,21 @@ import type { StateDelta } from '../../story-state-store'
 import { indexChapterSegments } from '../knowledge-retrieval'
 import { runLightCheck } from '../audit/light-check'
 import { formatAiErrorMessage } from '../error-message'
+import { createHash, randomUUID } from 'node:crypto'
+import { BackgroundTaskCoordinator } from './background-task-coordinator'
+import {
+  beginChapterProcessing,
+  finishChapterProcessing,
+  type ChapterProcessingStageStatus
+} from './chapter-processing-store'
+
+const postGenerationTasks = new BackgroundTaskCoordinator()
+
+type PostGenerationPipelineResult = {
+  issues: ChapterPostGenerationIssuesPayload['issues']
+  stateStatus: ChapterProcessingStageStatus
+  indexStatus: ChapterProcessingStageStatus
+}
 
 /**
  * 执行一次完整的 AI 任务调用（非流式）。
@@ -153,7 +169,7 @@ export async function runAiTask(
       const chIdx = Number(task.context.chapterIndex ?? task.context.chapterSortOrder ?? 0)
 
       if (finalContent.length > 50) {
-        void runPostGenerationPipeline(settings, projectId, chIdx, chapterId, finalContent, task.context)
+        schedulePostGenerationPipeline(settings, projectId, chIdx, chapterId, finalContent, task.context)
       }
     }
 
@@ -305,7 +321,7 @@ export async function streamAiTask(
       const chapterId = String(task.context.chapterId ?? '').trim()
       const chIdx = Number(task.context.chapterIndex ?? task.context.chapterSortOrder ?? 0)
       if (finalContent.length > 50) {
-        void runPostGenerationPipeline(settings, projectId, chIdx, chapterId, finalContent, task.context)
+        schedulePostGenerationPipeline(settings, projectId, chIdx, chapterId, finalContent, task.context)
       }
     }
 
@@ -378,6 +394,7 @@ export async function testAiConnection(rawSettings: AppSettings): Promise<{ prov
 
 let chapterWarningsEmitter: ((payload: ChapterStateWarningsPayload) => void) | null = null
 let chapterPostGenerationIssuesEmitter: ((payload: ChapterPostGenerationIssuesPayload) => void) | null = null
+let chapterPostGenerationTaskEmitter: ((payload: ChapterPostGenerationTaskPayload) => void) | null = null
 
 /**
  * IPC 层注入一个广播回调：章节轻检发现违规时，把告警推到前端。
@@ -389,6 +406,10 @@ export function setChapterWarningsEmitter(emit: (payload: ChapterStateWarningsPa
 
 export function setChapterPostGenerationIssuesEmitter(emit: (payload: ChapterPostGenerationIssuesPayload) => void): void {
   chapterPostGenerationIssuesEmitter = emit
+}
+
+export function setChapterPostGenerationTaskEmitter(emit: (payload: ChapterPostGenerationTaskPayload) => void): void {
+  chapterPostGenerationTaskEmitter = emit
 }
 
 function buildIssueDetail(error: unknown): string | undefined {
@@ -433,25 +454,166 @@ function extractInvolvedCharacterIds(context: Record<string, unknown>): string[]
 }
 
 /** 章节初稿生成后的异步后处理管线：提取状态变更 → 轻量审计 → 写入状态库 → 建立向量索引 */
-async function runPostGenerationPipeline(
+function schedulePostGenerationPipeline(
   settings: AppSettings,
   projectId: string,
   chapterIndex: number,
   chapterId: string,
   chapterContent: string,
   context: Record<string, unknown>
-): Promise<void> {
+): void {
+  const key = `${projectId}:${chapterId || chapterIndex}`
+  const fingerprint = createHash('sha256').update(chapterContent).digest('hex')
+  const taskKey = `chapter-post-process:${key}`
+  const runId = randomUUID()
+  const chapterTitle = String(context.chapterTitle ?? '').trim() || `第 ${chapterIndex + 1} 章`
+  void postGenerationTasks.runLatest(
+    key,
+    fingerprint,
+    async (signal) => {
+      const startedAt = Date.now()
+      if (signal.aborted) return
+      if (chapterId) {
+        try {
+          const db = await ensureWorkspaceDb()
+          if (signal.aborted) return
+          beginChapterProcessing(db, {
+            projectId,
+            chapterId,
+            chapterIndex,
+            contentHash: fingerprint,
+            startedAt: new Date(startedAt).toISOString()
+          })
+        } catch (error) {
+          if (signal.aborted) return
+          logError('POST_GENERATION_STATE_BEGIN', settings, 'chapter-first-draft', error, 0)
+        }
+      }
+      if (signal.aborted) return
+      chapterPostGenerationTaskEmitter?.({
+        taskKey,
+        runId,
+        projectId,
+        chapterId,
+        chapterIndex,
+        chapterTitle,
+        stage: 'running',
+        startedAt
+      })
+      try {
+        const pipelineResult = await runPostGenerationPipeline(
+          settings,
+          projectId,
+          chapterIndex,
+          chapterId,
+          chapterContent,
+          context,
+          signal
+        )
+        const failedIssue = pipelineResult.issues.find((issue) => issue.severity === 'error')
+        const status = signal.aborted ? 'canceled' : failedIssue ? 'error' : 'done'
+        const finishedAt = Date.now()
+        if (chapterId) {
+          try {
+            const db = await ensureWorkspaceDb()
+            finishChapterProcessing(db, {
+              projectId,
+              chapterId,
+              contentHash: fingerprint,
+              status,
+              stateStatus: pipelineResult.stateStatus,
+              indexStatus: pipelineResult.indexStatus,
+              issues: pipelineResult.issues,
+              finishedAt: new Date(finishedAt).toISOString()
+            })
+          } catch (error) {
+            logError('POST_GENERATION_STATE_FINISH', settings, 'chapter-first-draft', error, 0)
+          }
+        }
+        chapterPostGenerationTaskEmitter?.({
+          taskKey,
+          runId,
+          projectId,
+          chapterId,
+          chapterIndex,
+          chapterTitle,
+          stage: status,
+          startedAt,
+          finishedAt,
+          ...(failedIssue ? { error: failedIssue.message } : {})
+        })
+      } catch (error) {
+        const finishedAt = Date.now()
+        if (chapterId) {
+          try {
+            const db = await ensureWorkspaceDb()
+            finishChapterProcessing(db, {
+              projectId,
+              chapterId,
+              contentHash: fingerprint,
+              status: signal.aborted ? 'canceled' : 'error',
+              stateStatus: 'error',
+              indexStatus: 'pending',
+              issues: signal.aborted ? [] : [{
+                stage: 'pipeline',
+                severity: 'error',
+                message: '章节后处理执行失败。',
+                detail: buildIssueDetail(error)
+              }],
+              finishedAt: new Date(finishedAt).toISOString()
+            })
+          } catch (persistError) {
+            logError('POST_GENERATION_STATE_FINISH', settings, 'chapter-first-draft', persistError, 0)
+          }
+        }
+        chapterPostGenerationTaskEmitter?.({
+          taskKey,
+          runId,
+          projectId,
+          chapterId,
+          chapterIndex,
+          chapterTitle,
+          stage: signal.aborted ? 'canceled' : 'error',
+          startedAt,
+          finishedAt,
+          ...(signal.aborted ? {} : { error: buildIssueDetail(error) })
+        })
+      }
+    }
+  ).catch((error) => {
+    logError('POST_GENERATION_SCHEDULE', settings, 'chapter-first-draft', error, 0)
+  })
+}
+
+async function runPostGenerationPipeline(
+  settings: AppSettings,
+  projectId: string,
+  chapterIndex: number,
+  chapterId: string,
+  chapterContent: string,
+  context: Record<string, unknown>,
+  signal: AbortSignal
+): Promise<PostGenerationPipelineResult> {
   const generatedAt = new Date().toISOString()
   const issues: ChapterPostGenerationIssuesPayload['issues'] = []
+  let stateStatus: ChapterProcessingStageStatus = 'pending'
+  let indexStatus: ChapterProcessingStageStatus = chapterId ? 'pending' : 'skipped'
 
   try {
     const db = await ensureWorkspaceDb()
     const involvedCharIds = extractInvolvedCharacterIds(context)
     const preState = buildStoryStateContext(db, projectId, involvedCharIds)
 
-    const deltaResult = await extractStateDeltaViaLLMWithDiagnostics(settings, chapterContent, preState)
+    const deltaResult = await extractStateDeltaViaLLMWithDiagnostics(
+      settings,
+      chapterContent,
+      preState,
+      signal
+    )
+    signal.throwIfAborted()
     if (deltaResult.issue) {
       issues.push(deltaResult.issue)
+      stateStatus = 'warning'
     }
 
     if (deltaResult.delta) {
@@ -472,7 +634,9 @@ async function runPostGenerationPipeline(
 
       try {
         applyStateDelta(db, projectId, chapterIndex, deltaResult.delta)
+        if (stateStatus === 'pending') stateStatus = 'done'
       } catch (error) {
+        stateStatus = 'error'
         logError('POST_GENERATION_APPLY_STATE', settings, 'chapter-first-draft', error, 0)
         issues.push({
           stage: 'pipeline',
@@ -481,12 +645,24 @@ async function runPostGenerationPipeline(
           detail: buildIssueDetail(error)
         })
       }
+    } else if (stateStatus === 'pending') {
+      stateStatus = 'skipped'
     }
 
     if (chapterId) {
       try {
-        await indexChapterSegments(settings, projectId, chapterIndex, chapterContent, chapterId)
+        const indexResult = await indexChapterSegments(
+          settings,
+          projectId,
+          chapterIndex,
+          chapterContent,
+          chapterId,
+          signal
+        )
+        indexStatus = indexResult === 'indexed' ? 'done' : 'skipped'
       } catch (error) {
+        signal.throwIfAborted()
+        indexStatus = 'warning'
         logError('POST_GENERATION_INDEX', settings, 'chapter-first-draft', error, 0)
         issues.push({
           stage: 'vector-index',
@@ -497,6 +673,8 @@ async function runPostGenerationPipeline(
       }
     }
   } catch (error) {
+    if (signal.aborted) return { issues, stateStatus, indexStatus }
+    if (stateStatus === 'pending') stateStatus = 'error'
     logError('POST_GENERATION_PIPELINE', settings, 'chapter-first-draft', error, 0)
     issues.push({
       stage: 'pipeline',
@@ -506,7 +684,9 @@ async function runPostGenerationPipeline(
     })
   }
 
+  if (signal.aborted) return { issues, stateStatus, indexStatus }
   emitPostGenerationIssues(projectId, chapterId, chapterIndex, generatedAt, issues)
+  return { issues, stateStatus, indexStatus }
 }
 
 /**
@@ -528,7 +708,8 @@ export async function extractStateDeltaViaLLM(
 export async function extractStateDeltaViaLLMWithDiagnostics(
   settings: AppSettings,
   chapterContent: string,
-  preState: ReturnType<typeof buildStoryStateContext>
+  preState: ReturnType<typeof buildStoryStateContext>,
+  signal?: AbortSignal
 ): Promise<{
   delta: StateDelta | null
   rawText?: string
@@ -556,7 +737,7 @@ ${chapterContent}
   }
 
   try {
-    const generation = await aiGenerateTextWithUsage(settings, prompt, 1500, undefined, { disableReasoning: true })
+    const generation = await aiGenerateTextWithUsage(settings, prompt, 1500, signal, { disableReasoning: true })
     const raw = generation.text
     const parsed = extractJsonObject(raw) as unknown as StateDelta
     if (!parsed.characters_updated) parsed.characters_updated = []
@@ -565,6 +746,7 @@ ${chapterContent}
     if (!parsed.timeline) parsed.timeline = { story_time_elapsed: '', current_story_date: '', events: [] }
     return { delta: parsed, rawText: raw, usage: generation.usage }
   } catch (error) {
+    signal?.throwIfAborted()
     logError('STATE_DELTA_EXTRACT', settings, 'chapter-first-draft', error, 0)
     return {
       delta: null,

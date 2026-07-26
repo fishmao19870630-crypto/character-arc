@@ -96,7 +96,8 @@ export function getObservedEmbeddingDimension(settings: AppSettings): number | n
  */
 export async function embedTexts(
   settings: AppSettings,
-  texts: string[]
+  texts: string[],
+  signal?: AbortSignal
 ): Promise<Float32Array[]> {
   if (!texts.length) return []
 
@@ -115,7 +116,8 @@ export async function embedTexts(
   const results: Float32Array[] = []
   for (let i = 0; i < texts.length; i += MAX_BATCH_SIZE) {
     const batch = texts.slice(i, i + MAX_BATCH_SIZE)
-    const batchResults = await requestEmbeddings(baseUrl, apiKey, batch, embeddingModel)
+    signal?.throwIfAborted()
+    const batchResults = await requestEmbeddings(baseUrl, apiKey, batch, embeddingModel, signal)
     if (batchResults.length) {
       const dim = batchResults[0].length
       const existing = observedDimensions.get(dimKey)
@@ -156,13 +158,16 @@ async function requestEmbeddings(
   baseUrl: string,
   apiKey: string,
   inputs: string[],
-  embeddingModel: string
+  embeddingModel: string,
+  signal?: AbortSignal
 ): Promise<Float32Array[]> {
   const url = `${baseUrl}/embeddings`
 
   // embedding 检索发生在生成请求之前并被同步 await，无超时会让慢/挂起的接口直接卡死首字输出。
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), EMBEDDING_REQUEST_TIMEOUT_MS)
+  const abortFromCaller = () => controller.abort(signal?.reason)
+  signal?.addEventListener('abort', abortFromCaller, { once: true })
 
   let response: Response
   try {
@@ -181,11 +186,13 @@ async function requestEmbeddings(
     })
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
+      signal?.throwIfAborted()
       throw new Error(`Embedding API 请求超时（>${EMBEDDING_REQUEST_TIMEOUT_MS / 1000}s）`)
     }
     throw error
   } finally {
     clearTimeout(timeout)
+    signal?.removeEventListener('abort', abortFromCaller)
   }
 
   if (!response.ok) {

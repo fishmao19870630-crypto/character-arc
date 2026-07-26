@@ -573,10 +573,23 @@ export function useAssistant(options: UseAssistantOptions) {
   }
 
   async function commitAccepted(ids?: string[]): Promise<{ committed: number; failed: number }> {
-    const results = await A.stageCommit({ changeIds: ids })
+    if (!activeSessionId.value) return { committed: 0, failed: 0 }
+    const expectedAcceptedCount = ids?.length
+      ? stagedChanges.value.filter((change) =>
+        ids.includes(change.id) && change.status === 'accepted'
+      ).length
+      : acceptedStaged.value.length
+    const results = await A.stageCommit({
+      sessionId: activeSessionId.value,
+      changeIds: ids
+    })
     const errors = results.filter((r) => !r.ok)
-    if (errors.length > 0) {
+    if (results.length === 0 && expectedAcceptedCount > 0) {
+      lastError.value = '没有变更被写回：暂存区状态可能已过期，请刷新后重试。'
+    } else if (errors.length > 0) {
       lastError.value = `${errors.length} 项提交失败：${errors.map((e) => e.error).join('; ')}`
+    } else {
+      lastError.value = null
     }
     await reloadStaged()
     return { committed: results.length - errors.length, failed: errors.length }

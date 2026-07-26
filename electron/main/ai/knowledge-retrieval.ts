@@ -633,37 +633,44 @@ export async function indexChapterSegments(
   projectId: string,
   chapterIndex: number,
   chapterContent: string,
-  chapterId: string
-): Promise<void> {
-  if (!chapterContent || chapterContent.length < 50) return
-  if (!providerSupportsEmbedding(settings)) return
-
-  const db = await ensureWorkspaceDb()
-
-  db.prepare(
-    `DELETE FROM story_embeddings WHERE project_id = ? AND source_id = ?`
-  ).run(projectId, chapterId)
+  chapterId: string,
+  signal?: AbortSignal
+): Promise<'indexed' | 'skipped'> {
+  if (!chapterContent || chapterContent.length < 50) return 'skipped'
+  if (!providerSupportsEmbedding(settings)) return 'skipped'
 
   const segments = splitForEmbedding(chapterContent)
-  if (!segments.length) return
+  if (!segments.length) return 'skipped'
 
-  let embeddings: Float32Array[]
-  try {
-    embeddings = await embedTexts(settings, segments)
-  } catch {
-    return
+  const embeddings = await embedTexts(settings, segments, signal)
+  if (embeddings.length !== segments.length) {
+    throw new Error('Embedding API 返回数量与章节分段数量不一致')
   }
+  signal?.throwIfAborted()
 
-  const stmt = db.prepare(`
-    INSERT INTO story_embeddings (id, project_id, source_type, source_id, chapter_index, text_content, embedding, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `)
+  const db = await ensureWorkspaceDb()
+  db.exec('BEGIN')
+  try {
+    db.prepare(
+      `DELETE FROM story_embeddings WHERE project_id = ? AND source_id = ?`
+    ).run(projectId, chapterId)
 
-  const timestamp = new Date().toISOString()
-  for (let i = 0; i < segments.length; i++) {
-    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-    const buffer = Buffer.from(embeddings[i].buffer)
-    stmt.run(id, projectId, 'chapter_segment', chapterId, chapterIndex, segments[i], buffer, timestamp)
+    const stmt = db.prepare(`
+      INSERT INTO story_embeddings (id, project_id, source_type, source_id, chapter_index, text_content, embedding, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+
+    const timestamp = new Date().toISOString()
+    for (let i = 0; i < segments.length; i++) {
+      const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+      const buffer = Buffer.from(embeddings[i].buffer)
+      stmt.run(id, projectId, 'chapter_segment', chapterId, chapterIndex, segments[i], buffer, timestamp)
+    }
+    db.exec('COMMIT')
+    return 'indexed'
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
   }
 }
 

@@ -99,6 +99,7 @@ function iconForKind(kind: AiTaskKind) {
     case 'chapter-draft':
     case 'chapter-summary':
     case 'chapter-assistant':
+    case 'chapter-post-process':
       return Feather
     case 'plot-thread':
       return Library
@@ -146,7 +147,8 @@ const runningCount = computed(() => appStore.runningAiTasks.length)
           :class="{
             'stage-running': run.stage === 'running',
             'stage-done': run.stage === 'done',
-            'stage-error': run.stage === 'error'
+            'stage-error': run.stage === 'error',
+            'stage-canceled': run.stage === 'canceled'
           }"
         >
           <span class="task-icon" :aria-hidden="true">
@@ -158,6 +160,7 @@ const runningCount = computed(() => appStore.runningAiTasks.length)
               <span class="task-meta">
                 <template v-if="run.stage === 'running'">{{ formatElapsed(run) }}</template>
                 <template v-else-if="run.stage === 'done'">已完成 · {{ formatElapsed(run) }}</template>
+                <template v-else-if="run.stage === 'canceled'">已替换 · {{ formatElapsed(run) }}</template>
                 <template v-else>失败 · {{ formatElapsed(run) }}</template>
               </span>
             </div>
@@ -323,6 +326,11 @@ const runningCount = computed(() => appStore.runningAiTasks.length)
 .stage-error .task-icon {
   color: #dc2626;
   background: rgba(220, 38, 38, 0.12);
+}
+
+.stage-canceled .task-icon {
+  color: var(--arc-text-secondary);
+  background: var(--arc-glass-06);
 }
 
 .task-main {

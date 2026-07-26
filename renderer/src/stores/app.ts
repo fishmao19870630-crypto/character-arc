@@ -38,7 +38,12 @@ import {
   type LegacyStoredState,
   type StoredState
 } from '@/features/workspace/storeHelpers'
-import { AI_TASK_RETENTION_MS, type AiTaskRun, type AiTaskRunInput } from '@/features/ai/taskRegistry'
+import {
+  AI_TASK_RETENTION_MS,
+  applyExternalAiTaskEvent,
+  type AiTaskRun,
+  type AiTaskRunInput
+} from '@/features/ai/taskRegistry'
 import type {
   AssistantEditEvent,
   AssistantToolCall,
@@ -443,6 +448,35 @@ export const useAppStore = defineStore('app', () => {
       next.set(payload.chapterId, payload)
     }
     chapterPostGenerationIssues.value = next
+  }
+
+  function handleChapterPostGenerationTask(payload: CharacterArcChapterPostGenerationTaskPayload): void {
+    if (!payload?.taskKey || !payload.runId) return
+    const next = applyExternalAiTaskEvent(aiTaskRuns.value, {
+      taskKey: payload.taskKey,
+      runId: payload.runId,
+      stage: payload.stage,
+      label: '章节分析与索引',
+      description: `正在处理《${payload.chapterTitle}》的状态与检索索引`,
+      startedAt: payload.startedAt,
+      finishedAt: payload.finishedAt,
+      error: payload.error
+    })
+    if (next === aiTaskRuns.value) return
+    aiTaskRuns.value = next
+
+    if (payload.stage === 'running') return
+    const terminalStartedAt = payload.startedAt
+    window.setTimeout(() => {
+      const current = aiTaskRuns.value.get(payload.taskKey)
+      if (
+        current?.runId === payload.runId
+        && current.startedAt === terminalStartedAt
+        && current.stage !== 'running'
+      ) {
+        replaceTaskRuns((runs) => runs.delete(payload.taskKey))
+      }
+    }, AI_TASK_RETENTION_MS)
   }
 
   function getChapterPostGenerationIssues(chapterId: string): CharacterArcChapterPostGenerationIssuesPayload | null {
@@ -3225,6 +3259,7 @@ export const useAppStore = defineStore('app', () => {
   window.characterArc.onAiRunEvent(handleAiRunEvent)
   window.characterArc.onChapterStateWarnings(handleChapterStateWarnings)
   window.characterArc.onChapterPostGenerationIssues(handleChapterPostGenerationIssues)
+  window.characterArc.onChapterPostGenerationTask(handleChapterPostGenerationTask)
 
   // ── 响应式监听器 ──
   // 切换章节时清空选中文本

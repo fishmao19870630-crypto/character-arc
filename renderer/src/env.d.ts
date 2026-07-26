@@ -183,6 +183,19 @@ declare global {
     }>
   }
 
+  type CharacterArcChapterPostGenerationTaskPayload = {
+    taskKey: string
+    runId: string
+    projectId: string
+    chapterId: string
+    chapterIndex: number
+    chapterTitle: string
+    stage: 'running' | 'done' | 'error' | 'canceled'
+    startedAt: number
+    finishedAt?: number
+    error?: string
+  }
+
   type CharacterArcBackfillStateProgressPayload = {
     projectId: string
     current: number
@@ -268,6 +281,7 @@ declare global {
       onAiRunEvent: (callback: (payload: CharacterArcAiRunEventPayload) => void) => () => void
       onChapterStateWarnings: (callback: (payload: CharacterArcChapterStateWarningsPayload) => void) => () => void
       onChapterPostGenerationIssues: (callback: (payload: CharacterArcChapterPostGenerationIssuesPayload) => void) => () => void
+      onChapterPostGenerationTask: (callback: (payload: CharacterArcChapterPostGenerationTaskPayload) => void) => () => void
       spiralBootstrap: (payload: unknown) => Promise<{
         success: boolean
         result?: import('@/features/wizard/projectSeed').SpiralBootstrapResult
