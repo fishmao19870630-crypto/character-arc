@@ -293,7 +293,7 @@ export const useAppStore = defineStore('app', () => {
   /** 持久化全部知识文档；项目知识按 projectId 隔离，参考资料保持全局。 */
   const allKnowledgeDocuments = ref<KnowledgeDocument[]>(
     (stored.knowledgeDocuments ?? []).map((document) =>
-      normalizeKnowledgeDocumentScope(document, selectedProjectId.value || projects.value[0]?.id || '')
+      normalizeKnowledgeDocumentScope(document)
     )
   )
   /** 当前项目可见的知识文档，以及所有项目共享的参考资料。 */
@@ -608,7 +608,7 @@ export const useAppStore = defineStore('app', () => {
     coverWorkbenchHistory.value = Array.isArray(payload.coverWorkbenchHistory) ? payload.coverWorkbenchHistory : []
     allKnowledgeDocuments.value = Array.isArray((payload as Partial<StoredState>).knowledgeDocuments)
       ? (payload as Partial<StoredState>).knowledgeDocuments!.map((document) =>
-          normalizeKnowledgeDocumentScope(document, selectedProjectId.value || fallbackProjectId)
+          normalizeKnowledgeDocumentScope(document)
         )
       : []
     referenceWorks.value = Array.isArray((payload as Partial<StoredState>).referenceWorks)
