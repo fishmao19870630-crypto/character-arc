@@ -11,6 +11,7 @@ import AiEnhancePreview from './AiEnhancePreview.vue'
 import BatchGenerateDialog from './BatchGenerateDialog.vue'
 import type { EnhanceFieldDiff } from './AiEnhancePreview.vue'
 import { useCatalogBatch } from '@/composables/useCatalogBatch'
+import { useIncrementalList } from '@/composables/useIncrementalList'
 
 const props = defineProps<{
   searchQuery?: string // 全局搜索关键词，用于过滤世界观词条
@@ -91,6 +92,10 @@ const filteredEntries = computed(() => {
     return matchesType && matchesQuery
   })
 })
+const visibleEntries = useIncrementalList(
+  filteredEntries,
+  computed(() => `${props.searchQuery ?? ''}\u0000${keyword.value}\u0000${typeFilter.value ?? ''}`)
+)
 const isEditing = computed(() => Boolean(editingEntryId.value)) // 判断当前是编辑模式还是新建模式
 const menuOptions: DropdownOption[] = [ // 词条卡片的右键菜单选项
   { key: 'edit', label: '编辑词条' },
@@ -354,7 +359,7 @@ watch(
         <span>操作</span>
       </div>
       <article
-        v-for="entry in filteredEntries"
+        v-for="entry in visibleEntries"
         :key="entry.id"
         class="world-row"
         :class="{ 'assistant-focused': focusedEntryId === entry.id }"

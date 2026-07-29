@@ -26,6 +26,7 @@ import AiEnhancePreview from './AiEnhancePreview.vue'
 import BatchGenerateDialog from './BatchGenerateDialog.vue'
 import type { EnhanceFieldDiff } from './AiEnhancePreview.vue'
 import { useCatalogBatch } from '@/composables/useCatalogBatch'
+import { useIncrementalList } from '@/composables/useIncrementalList'
 
 const props = defineProps<{
   searchQuery?: string // 全局搜索关键词
@@ -206,6 +207,14 @@ const filteredMemberships = computed(() => {
   })
 })
 
+const relationListResetKey = computed(() => `${mergedQuery.value}\u0000${activeListSection.value}`)
+const visibleOrganizations = useIncrementalList(filteredOrganizations, relationListResetKey)
+const visibleRelationships = useIncrementalList(filteredRelationships, relationListResetKey)
+const visibleMemberships = useIncrementalList(
+  filteredMemberships,
+  computed(() => `${relationListResetKey.value}\u0000${membershipOrganizationFilter.value ?? ''}\u0000${membershipGroupMode.value}`)
+)
+
 type MembershipListItem = OrganizationMembership & {
   characterName: string
   organizationName: string
@@ -224,7 +233,7 @@ const membershipGroups = computed<MembershipGroup[]>(() => {
   const organizationOrder = new Map(appStore.organizations.map((organization, index) => [organization.id, index]))
   const characterOrder = new Map(appStore.characters.map((character, index) => [character.id, index]))
 
-  filteredMemberships.value.forEach((membership) => {
+  visibleMemberships.value.forEach((membership) => {
     const groupByOrganization = membershipGroupMode.value === 'organization'
     const organization = organizationMap.value.get(membership.organizationId)
     const character = characterMap.value.get(membership.characterId)
@@ -984,7 +993,7 @@ function handleEnhanceMemApply(accepted: Record<string, string | string[]>): voi
 
       <section v-if="activeListSection === 'organizations'" class="list-section">
         <div v-if="filteredOrganizations.length > 0" class="entity-grid">
-          <article v-for="organization in filteredOrganizations" :key="organization.id" class="entity-card">
+          <article v-for="organization in visibleOrganizations" :key="organization.id" class="entity-card">
             <div class="entity-card-top">
               <div class="entity-badge" :style="{ background: orgBadgeBgLight(orgBadgeColor(organization)), color: orgBadgeColor(organization) }">{{ orgInitial(organization.name) }}</div>
               <div class="entity-head-copy">
@@ -1015,7 +1024,7 @@ function handleEnhanceMemApply(accepted: Record<string, string | string[]>): voi
 
       <section v-else-if="activeListSection === 'relationships'" class="list-section">
         <div v-if="filteredRelationships.length > 0" class="card-list relationship-list">
-          <article v-for="relationship in filteredRelationships" :key="relationship.id" class="entity-card">
+          <article v-for="relationship in visibleRelationships" :key="relationship.id" class="entity-card">
             <div class="entity-card-top">
               <div class="link-pair">
                 <span>{{ relationship.fromCharacterName }}</span>

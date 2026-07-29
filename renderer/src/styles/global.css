@@ -1315,6 +1315,24 @@ input {
   opacity: 0;
 }
 
+/* 大数据列表跳过屏外内容的样式和布局计算，降低面板首次打开的主线程压力。 */
+:is(
+  .character-card,
+  .world-row,
+  .inspiration-card,
+  .thread-card,
+  .entity-card,
+  .membership-group,
+  .timeline-node,
+  .result-group,
+  .result-card,
+  .pk-state-item,
+  .pk-history-item
+) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 140px;
+}
+
 .arc-editor-modal {
   width: min(92vw, 560px);
   border-radius: var(--arc-radius-lg);

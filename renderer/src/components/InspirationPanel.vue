@@ -9,6 +9,7 @@ import type { DropdownOption } from 'naive-ui'
 import type { InspirationEntry } from '@/types/app'
 import BatchGenerateDialog from './BatchGenerateDialog.vue'
 import { normalizeCatalogTags, useCatalogBatch } from '@/composables/useCatalogBatch'
+import { useIncrementalList } from '@/composables/useIncrementalList'
 
 const props = defineProps<{
   searchQuery?: string // 全局搜索关键词
@@ -61,6 +62,10 @@ const filteredEntries = computed(() => {
     return matchesType && matchesSource && matchesQuery
   })
 })
+const visibleEntries = useIncrementalList(
+  filteredEntries,
+  computed(() => `${props.searchQuery ?? ''}\u0000${keyword.value}\u0000${typeFilter.value ?? ''}\u0000${sourceFilter.value}`)
+)
 // AI 生成的灵感数量
 const aiEntryCount = computed(() => appStore.inspirationEntries.filter((entry) => entry.source === 'ai').length)
 // 手动记录的灵感数量
@@ -260,7 +265,7 @@ function handleMenuSelect(action: string | number, entry: InspirationEntry): voi
 
     <div v-if="filteredEntries.length > 0" class="inspiration-grid">
       <article
-        v-for="entry in filteredEntries"
+        v-for="entry in visibleEntries"
         :key="entry.id"
         class="inspiration-card"
         @click="openEditor(entry)"

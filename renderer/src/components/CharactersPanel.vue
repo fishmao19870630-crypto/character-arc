@@ -12,6 +12,7 @@ import AiEnhancePreview from './AiEnhancePreview.vue'
 import BatchGenerateDialog from './BatchGenerateDialog.vue'
 import type { EnhanceFieldDiff } from './AiEnhancePreview.vue'
 import { normalizeCatalogTags, useCatalogBatch } from '@/composables/useCatalogBatch'
+import { useIncrementalList } from '@/composables/useIncrementalList'
 
 const appStore = useAppStore()
 const dialog = useDialog()
@@ -42,6 +43,10 @@ const filteredCharacters = computed(() => {
     return matchesRole && (!mergedQuery || haystack.includes(mergedQuery))
   })
 })
+const visibleCharacters = useIncrementalList(
+  filteredCharacters,
+  computed(() => `${props.searchQuery ?? ''}\u0000${keyword.value}\u0000${roleFilter.value ?? ''}`)
+)
 const message = useMessage()
 const AI_TASK_KEY = 'catalog-batch:character'
 const isGenerating = computed(() => appStore.isAiTaskRunning(AI_TASK_KEY)) // AI 生成角色时的加载状态（走全局注册表）
@@ -347,7 +352,7 @@ watch(
     <div class="character-grid">
       <!-- Direct card click keeps high-frequency editing faster than routing every change through the overflow menu. -->
       <article
-        v-for="character in filteredCharacters"
+        v-for="character in visibleCharacters"
         :key="character.id"
         class="character-card"
         :class="{ 'assistant-focused': focusedCharacterId === character.id }"
