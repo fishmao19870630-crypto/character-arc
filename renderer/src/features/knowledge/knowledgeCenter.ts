@@ -326,6 +326,67 @@ export function isProjectKnowledgeSource(sourceType: KnowledgeDocumentSourceType
   return PROJECT_SOURCE_TYPES.has(sourceType)
 }
 
+/** 旧版项目知识没有 projectId；首次载入时归入当前（或默认）项目。参考资料始终保持全局。 */
+export function normalizeKnowledgeDocumentScope(
+  document: KnowledgeDocument,
+  fallbackProjectId: string
+): KnowledgeDocument {
+  return {
+    ...document,
+    projectId: isProjectKnowledgeSource(document.sourceType)
+      ? String(document.projectId ?? '').trim() || fallbackProjectId.trim()
+      : ''
+  }
+}
+
+/** 当前项目只能看到自己的项目知识，但仍可使用全局参考资料。 */
+export function filterKnowledgeDocumentsForProject(
+  documents: KnowledgeDocument[],
+  projectId: string
+): KnowledgeDocument[] {
+  const normalizedProjectId = projectId.trim()
+  return documents.filter((document) => (
+    !isProjectKnowledgeSource(document.sourceType)
+    || (Boolean(normalizedProjectId) && String(document.projectId ?? '').trim() === normalizedProjectId)
+  ))
+}
+
+function getKnowledgeDocumentSourceKey(document: KnowledgeDocument): string | null {
+  const sourceTitle = String(document.metadata?.sourceTitle ?? '').trim()
+  const fileName = String(document.metadata?.fileName ?? '').trim()
+  if (!sourceTitle) {
+    return null
+  }
+
+  const scopeKey = isProjectKnowledgeSource(document.sourceType)
+    ? `project:${String(document.projectId ?? '').trim()}`
+    : 'reference'
+  return `${scopeKey}::${sourceTitle}${fileName ? `::${fileName}` : ''}`
+}
+
+/** 同一来源的重建只替换同一作用域内的旧文档，不影响其他项目。 */
+export function replaceKnowledgeDocumentsBySource(
+  existingDocuments: KnowledgeDocument[],
+  incomingDocuments: KnowledgeDocument[]
+): KnowledgeDocument[] {
+  const incomingSourceKeys = new Set(
+    incomingDocuments
+      .map((document) => getKnowledgeDocumentSourceKey(document))
+      .filter((key): key is string => Boolean(key))
+  )
+  if (!incomingSourceKeys.size) {
+    return [...existingDocuments, ...incomingDocuments]
+  }
+
+  return [
+    ...existingDocuments.filter((document) => {
+      const sourceKey = getKnowledgeDocumentSourceKey(document)
+      return !sourceKey || !incomingSourceKeys.has(sourceKey)
+    }),
+    ...incomingDocuments
+  ]
+}
+
 export function resolveKnowledgeSourceScope(sourceType: KnowledgeDocumentSourceType): KnowledgeSourceScope {
   return isProjectKnowledgeSource(sourceType) ? 'project' : 'reference'
 }

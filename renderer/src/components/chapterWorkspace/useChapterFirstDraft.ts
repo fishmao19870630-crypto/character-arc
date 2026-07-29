@@ -864,6 +864,7 @@ export function useChapterFirstDraft(): {
                   const now = new Date().toISOString()
                   appStore.mergeKnowledgeDocuments([{
                     id: `journal-${Date.now()}`,
+                    projectId: project.id,
                     title: `写作日志｜${chapter.title}`,
                     sourceType: 'chapter-summary',
                     sourceLabel: 'writing-journal',

@@ -278,6 +278,7 @@ async function runStoryDeepAudit(): Promise<void> {
     const title = `一致性审计报告·第 ${currentChapterIndex} 章节点`
     appStore.mergeKnowledgeDocuments([{
       id: `knowledge-story-audit-${Date.now()}`,
+      projectId: project.id,
       title,
       sourceType: 'canon-fact',
       sourceLabel: 'story-deep-audit',

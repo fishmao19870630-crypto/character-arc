@@ -592,10 +592,12 @@ export type KnowledgeDocumentSourceType =
   | 'canon-fact'
   | 'chapter-summary'
 
-/** 全局拆书库知识文档 */
+/** 知识文档；参考资料为全局作用域，项目知识通过 projectId 隔离 */
 export interface KnowledgeDocument {
   /** 文档唯一标识 */
   id: string
+  /** 所属项目；全局参考资料为空 */
+  projectId?: string
   /** 展示标题 */
   title: string
   /** 来源类型 */

@@ -20,6 +20,12 @@ import { getThemePreset } from '@/theme/presets'
 import { createEmptyWorkspace, normalizeGlobalAssistantProposal, mergeGlobalAssistantProposals } from '@/features/workspace/projectWorkspace'
 import { createWorkspacePersistence } from '@/features/workspace/persistence'
 import {
+  filterKnowledgeDocumentsForProject,
+  isProjectKnowledgeSource,
+  normalizeKnowledgeDocumentScope,
+  replaceKnowledgeDocumentsBySource
+} from '@/features/knowledge/knowledgeCenter'
+import {
   buildStarterChapter,
   buildWorkspaceMapFromLegacy,
   defaultProjects,
@@ -284,8 +290,16 @@ export const useAppStore = defineStore('app', () => {
   const messages = computed(() => activeGlobalAssistantSession.value?.messages ?? currentWorkspace.value.messages)
   /** 当前项目的剧情线索列表 */
   const plotThreads = computed(() => currentWorkspace.value.plotThreads)
-  /** 全局拆书库知识文档（跨项目共享） */
-  const knowledgeDocuments = ref<KnowledgeDocument[]>(stored.knowledgeDocuments ?? [])
+  /** 持久化全部知识文档；项目知识按 projectId 隔离，参考资料保持全局。 */
+  const allKnowledgeDocuments = ref<KnowledgeDocument[]>(
+    (stored.knowledgeDocuments ?? []).map((document) =>
+      normalizeKnowledgeDocumentScope(document, selectedProjectId.value || projects.value[0]?.id || '')
+    )
+  )
+  /** 当前项目可见的知识文档，以及所有项目共享的参考资料。 */
+  const knowledgeDocuments = computed(() =>
+    filterKnowledgeDocumentsForProject(allKnowledgeDocuments.value, selectedProjectId.value)
+  )
   const projectConstraints = computed(() =>
     knowledgeDocuments.value
       .filter((document) => document.sourceType === 'canon-fact' && document.sourceLabel === 'global-constraint')
@@ -386,6 +400,7 @@ export const useAppStore = defineStore('app', () => {
         )
         .map<KnowledgeDocument>((draft) => ({
           id: String(draft.id ?? '').trim() || uniqueId('knowledge'),
+          projectId: String(draft.projectId ?? '').trim() || runProjectId,
           title: String(draft.title).trim(),
           sourceType: draft.sourceType,
           sourceLabel: String(draft.sourceLabel ?? '').trim(),
@@ -591,8 +606,10 @@ export const useAppStore = defineStore('app', () => {
 
     appSettings.value = normalizeAppSettings(payload.appSettings)
     coverWorkbenchHistory.value = Array.isArray(payload.coverWorkbenchHistory) ? payload.coverWorkbenchHistory : []
-    knowledgeDocuments.value = Array.isArray((payload as Partial<StoredState>).knowledgeDocuments)
-      ? (payload as Partial<StoredState>).knowledgeDocuments!
+    allKnowledgeDocuments.value = Array.isArray((payload as Partial<StoredState>).knowledgeDocuments)
+      ? (payload as Partial<StoredState>).knowledgeDocuments!.map((document) =>
+          normalizeKnowledgeDocumentScope(document, selectedProjectId.value || fallbackProjectId)
+        )
       : []
     referenceWorks.value = Array.isArray((payload as Partial<StoredState>).referenceWorks)
       ? (payload as Partial<StoredState>).referenceWorks!
@@ -607,7 +624,7 @@ export const useAppStore = defineStore('app', () => {
       selectedProjectId: selectedProjectId.value,
       projects: toSerializable(projects.value),
       workspaces: toSerializable(projectWorkspaces.value),
-      knowledgeDocuments: toSerializable(knowledgeDocuments.value),
+      knowledgeDocuments: toSerializable(allKnowledgeDocuments.value),
       referenceWorks: toSerializable(referenceWorks.value),
       appSettings: toSerializable(appSettings.value),
       coverWorkbenchHistory: toSerializable(coverWorkbenchHistory.value)
@@ -1091,6 +1108,9 @@ export const useAppStore = defineStore('app', () => {
     projects.value = projects.value.filter((project) => project.id !== projectId)
     const { [projectId]: _removedWorkspace, ...remainingWorkspaces } = projectWorkspaces.value
     projectWorkspaces.value = remainingWorkspaces
+    allKnowledgeDocuments.value = allKnowledgeDocuments.value.filter((document) => (
+      !isProjectKnowledgeSource(document.sourceType) || document.projectId !== projectId
+    ))
 
     if (selectedProjectId.value === projectId) {
       selectedProjectId.value = projects.value[0]?.id ?? ''
@@ -1155,7 +1175,7 @@ export const useAppStore = defineStore('app', () => {
   function mergeKnowledgeDocuments(documents: KnowledgeDocument[]): void {
     const normalizedDocuments = documents
       .filter((document) => document && typeof document.id === 'string' && document.id.trim())
-      .map((document) => ({
+      .map((document) => normalizeKnowledgeDocumentScope({
         ...document,
         keywords: Array.isArray(document.keywords)
           ? document.keywords.map((keyword) => String(keyword).trim()).filter(Boolean)
@@ -1165,34 +1185,12 @@ export const useAppStore = defineStore('app', () => {
           : {},
         createdAt: document.createdAt || new Date().toISOString(),
         updatedAt: document.updatedAt || document.createdAt || new Date().toISOString()
-      }))
+      }, selectedProjectId.value))
 
-    const getDocumentSourceKey = (document: KnowledgeDocument): string | null => {
-      const sourceTitle = String(document.metadata?.sourceTitle ?? '').trim()
-      const fileName = String(document.metadata?.fileName ?? '').trim()
-      if (sourceTitle && fileName) {
-        return `${sourceTitle}::${fileName}`
-      }
-      if (sourceTitle) {
-        return sourceTitle
-      }
-      return null
-    }
-
-    const incomingSourceKeys = new Set(
+    allKnowledgeDocuments.value = replaceKnowledgeDocumentsBySource(
+      allKnowledgeDocuments.value,
       normalizedDocuments
-        .map((document) => getDocumentSourceKey(document))
-        .filter((key): key is string => Boolean(key))
     )
-
-    const preservedDocuments = incomingSourceKeys.size
-      ? knowledgeDocuments.value.filter((document) => {
-          const sourceKey = getDocumentSourceKey(document)
-          return !sourceKey || !incomingSourceKeys.has(sourceKey)
-        })
-      : knowledgeDocuments.value
-
-    knowledgeDocuments.value = [...preservedDocuments, ...normalizedDocuments]
     schedulePersist('fast')
   }
 
@@ -1202,7 +1200,7 @@ export const useAppStore = defineStore('app', () => {
       return
     }
 
-    knowledgeDocuments.value = knowledgeDocuments.value.filter((document) => !idSet.has(document.id))
+    allKnowledgeDocuments.value = allKnowledgeDocuments.value.filter((document) => !idSet.has(document.id))
     schedulePersist('fast')
   }
 
@@ -1230,6 +1228,7 @@ export const useAppStore = defineStore('app', () => {
 
     const nextDocument: KnowledgeDocument = {
       id: existing?.id || uniqueId('constraint'),
+      projectId: selectedProjectId.value,
       title,
       sourceType: 'canon-fact',
       sourceLabel: 'global-constraint',
@@ -1250,11 +1249,11 @@ export const useAppStore = defineStore('app', () => {
     }
 
     if (existing) {
-      knowledgeDocuments.value = knowledgeDocuments.value.map((document) =>
+      allKnowledgeDocuments.value = allKnowledgeDocuments.value.map((document) =>
         document.id === existing.id ? nextDocument : document
       )
     } else {
-      knowledgeDocuments.value = [...knowledgeDocuments.value, nextDocument]
+      allKnowledgeDocuments.value = [...allKnowledgeDocuments.value, nextDocument]
     }
 
     schedulePersist('fast')

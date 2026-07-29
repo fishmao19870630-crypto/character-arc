@@ -17,6 +17,7 @@ import { initStoryStateSchema } from './story-state-store'
 import { initAssistantRuntimeSchema } from './ai/runtime-v2/conversation-manager'
 import { initChapterProcessingSchema } from './ai/runtime/chapter-processing-store'
 import { initStateBackfillSchema } from './ai/state-backfill-store'
+import { migrateKnowledgeDocumentScopes } from './knowledge-document-schema'
 
 const WORKSPACE_DB = 'workspace.db'
 const WORKSPACE_FILE = 'workspace.json'
@@ -530,31 +531,32 @@ function ensureKnowledgeDocumentSchema(db: DatabaseSync): void {
 
   if (!columnNames.has('project_id')) {
     db.exec(`ALTER TABLE knowledge_documents ADD COLUMN project_id TEXT NOT NULL DEFAULT '';`)
-    return
   }
 
-  if (!hasProjectIdFk) return
+  if (hasProjectIdFk) {
+    db.exec(`
+      CREATE TABLE knowledge_documents__new (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT '',
+        title TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_label TEXT NOT NULL,
+        content TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        keywords_json TEXT NOT NULL DEFAULT '[]',
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO knowledge_documents__new (id, project_id, title, source_type, source_label, content, summary, keywords_json, metadata_json, created_at, updated_at)
+      SELECT id, project_id, title, source_type, source_label, content, summary, keywords_json, metadata_json, created_at, updated_at
+      FROM knowledge_documents;
+      DROP TABLE knowledge_documents;
+      ALTER TABLE knowledge_documents__new RENAME TO knowledge_documents;
+    `)
+  }
 
-  db.exec(`
-    CREATE TABLE knowledge_documents__new (
-      id TEXT PRIMARY KEY,
-      project_id TEXT NOT NULL DEFAULT '',
-      title TEXT NOT NULL,
-      source_type TEXT NOT NULL,
-      source_label TEXT NOT NULL,
-      content TEXT NOT NULL,
-      summary TEXT NOT NULL,
-      keywords_json TEXT NOT NULL DEFAULT '[]',
-      metadata_json TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    ) STRICT;
-    INSERT INTO knowledge_documents__new (id, project_id, title, source_type, source_label, content, summary, keywords_json, metadata_json, created_at, updated_at)
-    SELECT id, project_id, title, source_type, source_label, content, summary, keywords_json, metadata_json, created_at, updated_at
-    FROM knowledge_documents;
-    DROP TABLE knowledge_documents;
-    ALTER TABLE knowledge_documents__new RENAME TO knowledge_documents;
-  `)
+  migrateKnowledgeDocumentScopes(db)
 }
 
 function ensureWorkflowDocumentColumns(db: DatabaseSync): void {
@@ -1638,7 +1640,7 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
       allIds.knowledge_documents.add(document.id)
       insertKnowledgeDocument.run(
         document.id,
-        String((document as Record<string, unknown>).projectId ?? ''),
+        String(document.projectId ?? ''),
         document.title,
         document.sourceType,
         document.sourceLabel,

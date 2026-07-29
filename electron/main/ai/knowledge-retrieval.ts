@@ -13,6 +13,7 @@ import type { AiTaskPayload, AppSettings } from './shared-types'
 import { buildStoryStateContext, formatStoryStateForPrompt } from '../story-state-store'
 import { embedText, cosineSimilarity, embedTexts, providerSupportsEmbedding } from './embedding-service'
 import { ensureWorkspaceDb } from '../workspace-store'
+import { filterProjectKnowledgeDocuments } from './knowledge-document-scope'
 
 // ─────────────────────────────────────────────────────────────
 // 关键词检索（usedKnowledge）
@@ -144,10 +145,10 @@ export function retrieveKnowledgeContext(
     return { usedKnowledge: [] }
   }
 
-  // 知识文档（含跨项目拆书库）统一存放在快照顶层，而非 workspaces[projectId] 下。
+  // 知识文档统一存放在快照顶层，而非 workspaces[projectId] 下。
   const allDocuments = Array.isArray(latestWorkspaceSnapshot.knowledgeDocuments) ? latestWorkspaceSnapshot.knowledgeDocuments : []
-  // 排除拆书库文档（reference-summary / reference-chunk）——这些只在用户显式选择参考书时注入
-  const documents = allDocuments.filter((d) => d.sourceType !== 'reference-summary' && d.sourceType !== 'reference-chunk')
+  // 参考资料只在用户显式选择参考书时注入；项目知识必须严格匹配当前项目。
+  const documents = filterProjectKnowledgeDocuments(allDocuments, projectId)
   if (!documents.length) {
     return { usedKnowledge: [] }
   }

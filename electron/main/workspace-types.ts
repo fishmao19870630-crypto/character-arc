@@ -9,6 +9,7 @@ export type KnowledgeDocumentSourceType =
 
 export type WorkspaceKnowledgeDocument = {
   id: string
+  projectId?: string
   title: string
   sourceType: KnowledgeDocumentSourceType
   sourceLabel: string
