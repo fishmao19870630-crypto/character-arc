@@ -197,7 +197,20 @@ const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
       title: stringField,
       summary: stringField,
       characters: z.array(z.object({ name: stringField, role: stringField })),
-      hooks: stringList
+      hooks: stringList,
+      worldFacts: z.array(z.object({ type: stringField, title: stringField, content: stringField })),
+      organizations: z.array(z.object({
+        name: stringField,
+        type: stringField,
+        description: stringField,
+        members: stringList
+      })),
+      relationships: z.array(z.object({
+        fromCharacter: stringField,
+        toCharacter: stringField,
+        type: stringField,
+        description: stringField
+      }))
     }))
   }),
   'continuation-import-aggregate': z.object({
@@ -209,6 +222,25 @@ const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
       role: stringField,
       description: stringField,
       tags: stringList
+    })),
+    worldviewEntries: z.array(z.object({
+      type: stringField,
+      title: stringField,
+      content: stringField
+    })),
+    organizations: z.array(z.object({
+      name: stringField,
+      type: stringField,
+      description: stringField,
+      motto: stringField,
+      members: z.array(z.object({ name: stringField, role: stringField, notes: stringField }))
+    })),
+    relationships: z.array(z.object({
+      fromCharacter: stringField,
+      toCharacter: stringField,
+      type: stringField,
+      description: stringField,
+      intensity: z.number()
     })),
     volumeSummaries: z.array(z.object({ title: stringField, summary: stringField }))
   }),

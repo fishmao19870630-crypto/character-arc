@@ -5,6 +5,7 @@ import {
   NButton,
   NCheckbox,
   NInput,
+  NInputNumber,
   NProgress,
   NSelect,
   NSwitch,
@@ -23,6 +24,7 @@ import {
   FolderOpen,
   ListTree,
   LoaderCircle,
+  Plus,
   RotateCcw,
   Scissors,
   Sparkles,
@@ -33,7 +35,18 @@ import {
 
 import { useAppStore } from '@/stores/app'
 import { createDefaultWorkflowDocuments } from '@/features/novelWorkflow/documents'
-import type { CharacterCard, ChapterDraft, OutlineItem, OutlineVolume } from '@/types/app'
+import type {
+  CharacterCard,
+  CharacterRelationship,
+  ChapterDraft,
+  KnowledgeDocument,
+  OrganizationEntry,
+  OrganizationMembership,
+  OutlineItem,
+  OutlineVolume,
+  PlotThread,
+  WorldviewEntry
+} from '@/types/app'
 import { toIpcPayload } from '@/utils/ipcPayload'
 import {
   buildContinuationChapterTitle,
@@ -51,6 +64,14 @@ type ChapterAnalysis = {
   summary: string
   characters: Array<{ name: string; role: string }>
   hooks: string[]
+  worldFacts: Array<{ type: string; title: string; content: string }>
+  organizations: Array<{ name: string; type: string; description: string; members: string[] }>
+  relationships: Array<{
+    fromCharacter: string
+    toCharacter: string
+    type: string
+    description: string
+  }>
   volumeTitle?: string
 }
 
@@ -63,6 +84,21 @@ type AggregateAnalysis = {
     role: string
     description: string
     tags: string[]
+  }>
+  worldviewEntries: Array<{ type: string; title: string; content: string }>
+  organizations: Array<{
+    name: string
+    type: string
+    description: string
+    motto: string
+    members: Array<{ name: string; role: string; notes: string }>
+  }>
+  relationships: Array<{
+    fromCharacter: string
+    toCharacter: string
+    type: string
+    description: string
+    intensity: number
   }>
   volumeSummaries: Array<{ title: string; summary: string }>
 }
@@ -84,6 +120,7 @@ const activeAiTaskId = ref('')
 const chapterAnalyses = ref<ChapterAnalysis[]>([])
 const aggregateAnalysis = ref<AggregateAnalysis | null>(null)
 const includedCharacterNames = ref<string[]>([])
+const includedHooks = ref<string[]>([])
 
 const projectForm = reactive({
   title: '',
@@ -91,11 +128,16 @@ const projectForm = reactive({
   novelLength: 'long' as 'short' | 'long',
   targetPlatform: '',
   nextChapterTitle: '',
+  nextChapterWordTarget: 3000,
+  continuationGoal: '',
+  continuationConstraints: '',
   useAi: false,
   aiSummaries: true,
   aiCharacters: true,
+  aiWorldview: true,
   aiOutline: true,
-  analysisScope: 'quick' as 'quick' | 'balanced' | 'full'
+  backfillStoryState: false,
+  analysisScope: 'balanced' as 'quick' | 'balanced' | 'full'
 })
 
 const genreOptions = [
@@ -104,8 +146,8 @@ const genreOptions = [
 const platformOptions = ['番茄小说', '起点中文网', '晋江文学城', '七猫小说', '知乎盐选', '其他']
   .map((label) => ({ label, value: label }))
 const scopeOptions = [
-  { label: '快速整理（最近 20 章）', value: 'quick' },
-  { label: '均衡整理（最近 50 章）', value: 'balanced' },
+  { label: '快速整理（全书抽样 20 章）', value: 'quick' },
+  { label: '均衡整理（全书抽样 50 章）', value: 'balanced' },
   { label: '完整整理（全部章节）', value: 'full' }
 ]
 
@@ -129,10 +171,33 @@ const filteredChapters = computed(() => {
     chapter.title.toLowerCase().includes(keyword) || chapter.volumeTitle.toLowerCase().includes(keyword)
   )
 })
+const reviewIssues = computed(() => {
+  const titleCounts = new Map<string, number>()
+  chapters.value.forEach((chapter) => {
+    const title = chapter.title.trim()
+    titleCounts.set(title, (titleCounts.get(title) ?? 0) + 1)
+  })
+  return chapters.value.flatMap((chapter) => {
+    const issues: Array<{ chapterId: string; label: string; detail: string }> = []
+    if (!chapter.content.trim()) issues.push({ chapterId: chapter.id, label: '空章节', detail: chapter.title })
+    if (!chapter.title.trim()) issues.push({ chapterId: chapter.id, label: '缺少标题', detail: '请补全章节标题' })
+    if (chapter.title.trim() && (titleCounts.get(chapter.title.trim()) ?? 0) > 1) {
+      issues.push({ chapterId: chapter.id, label: '标题重复', detail: chapter.title })
+    }
+    if (chapter.confidence !== 'high') issues.push({ chapterId: chapter.id, label: '待确认', detail: chapter.title })
+    return issues
+  })
+})
 const totalCharacterCount = computed(() => chapters.value.reduce((sum, chapter) => sum + chapter.characterCount, 0))
 const volumeCount = computed(() => new Set(chapters.value.map((chapter) => chapter.volumeTitle.trim() || '正文')).size)
-const hasAiSettings = computed(() => Boolean(appStore.appSettings.model && appStore.appSettings.apiKey))
-const hasAiModule = computed(() => projectForm.aiSummaries || projectForm.aiCharacters || projectForm.aiOutline)
+const hasAiSettings = computed(() => {
+  const settings = appStore.appSettings
+  const isLocal = /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/i.test(settings.baseUrl.trim())
+  return Boolean(settings.model && settings.baseUrl && (settings.apiKey || settings.provider === 'ollama' || isLocal))
+})
+const hasAiModule = computed(() => (
+  projectForm.aiSummaries || projectForm.aiCharacters || projectForm.aiWorldview || projectForm.aiOutline
+))
 const analysisChapterCount = computed(() => {
   if (projectForm.analysisScope === 'quick') return Math.min(20, chapters.value.length)
   if (projectForm.analysisScope === 'balanced') return Math.min(50, chapters.value.length)
@@ -173,7 +238,9 @@ async function pickNovel(): Promise<void> {
     projectForm.title = result.preview.title
     projectForm.novelLength = result.preview.characterCount >= 80_000 ? 'long' : 'short'
     projectForm.nextChapterTitle = inferNextContinuationChapterTitle(chapters.value)
-    projectForm.analysisScope = 'quick'
+    projectForm.analysisScope = 'balanced'
+    projectForm.useAi = hasAiSettings.value
+    includedHooks.value = []
     stage.value = 'review'
   } catch (error) {
     message.error(error instanceof Error ? error.message : '读取小说文件失败')
@@ -188,6 +255,7 @@ function resetImport(): void {
   selectedChapterId.value = ''
   chapterAnalyses.value = []
   aggregateAnalysis.value = null
+  includedHooks.value = []
   stage.value = 'source'
 }
 
@@ -198,6 +266,37 @@ function selectChapter(chapterId: string): void {
 function updateSelectedCharacterCount(): void {
   if (!selectedChapter.value) return
   selectedChapter.value.characterCount = selectedChapter.value.content.replace(/\s+/g, '').length
+}
+
+function addChapterAfterSelected(): void {
+  const index = Math.max(selectedChapterIndex.value, chapters.value.length - 1)
+  const previous = chapters.value[index]
+  const nextChapter: ContinuationImportChapter = {
+    id: entityId('import-chapter'),
+    title: buildContinuationChapterTitle(chapters.value.length),
+    volumeTitle: previous?.volumeTitle || '正文',
+    content: '',
+    characterCount: 0,
+    confidence: 'low'
+  }
+  chapters.value.splice(index + 1, 0, nextChapter)
+  selectedChapterId.value = nextChapter.id
+  projectForm.nextChapterTitle = inferNextContinuationChapterTitle(chapters.value)
+  void nextTick(() => contentEditorRef.value?.focus())
+}
+
+function confirmSelectedChapter(): void {
+  if (!selectedChapter.value) return
+  if (!selectedChapter.value.title.trim() || !selectedChapter.value.content.trim()) {
+    message.warning('请先补全章节标题和正文')
+    return
+  }
+  selectedChapter.value.confidence = 'high'
+}
+
+function focusReviewIssue(chapterId: string): void {
+  selectedChapterId.value = chapterId
+  void nextTick(() => contentEditorRef.value?.focus())
 }
 
 function moveSelectedChapter(direction: -1 | 1): void {
@@ -270,6 +369,10 @@ function proceedToSetup(): void {
     message.warning('请补全所有章节标题')
     return
   }
+  if (chapters.value.some((chapter) => !chapter.content.trim())) {
+    message.warning('请补全或删除没有正文的章节')
+    return
+  }
   stage.value = 'setup'
 }
 
@@ -290,6 +393,19 @@ function buildAnalysisBatches(source: ContinuationImportChapter[]): Continuation
   }
   if (current.length > 0) batches.push(current)
   return batches
+}
+
+function selectAnalysisChapters(): ContinuationImportChapter[] {
+  const limit = analysisChapterCount.value
+  if (projectForm.analysisScope === 'full' || chapters.value.length <= limit) return chapters.value
+
+  const recentCount = Math.ceil(limit * 0.6)
+  const sampleCount = limit - recentCount
+  const earlierEnd = chapters.value.length - recentCount
+  const sampled = Array.from({ length: sampleCount }, (_, index) => (
+    chapters.value[Math.floor(index * earlierEnd / sampleCount)]
+  ))
+  return [...sampled, ...chapters.value.slice(-recentCount)]
 }
 
 async function cancelAnalysis(): Promise<void> {
@@ -338,9 +454,7 @@ async function runAiAnalysis(): Promise<void> {
   aggregateAnalysis.value = null
 
   try {
-    const sourceChapters = projectForm.analysisScope === 'full'
-      ? chapters.value
-      : chapters.value.slice(-analysisChapterCount.value)
+    const sourceChapters = selectAnalysisChapters()
     const batches = buildAnalysisBatches(sourceChapters)
     for (let index = 0; index < batches.length; index += 1) {
       if (analysisCanceled.value) throw new Error('AI 分析已取消')
@@ -370,7 +484,7 @@ async function runAiAnalysis(): Promise<void> {
       analysisProgress.value = Math.round(((index + 1) / (batches.length + 1)) * 100)
     }
 
-    analysisMessage.value = '正在聚合人物、大纲和续写状态'
+    analysisMessage.value = '正在聚合人物、关系、世界观和续写状态'
     activeAiTaskId.value = entityId('continuation-aggregate')
     const aggregateResult = await window.characterArc.generateAi(toIpcPayload({
       task: 'continuation-import-aggregate',
@@ -380,6 +494,7 @@ async function runAiAnalysis(): Promise<void> {
         projectTitle: projectForm.title,
         projectGenre: projectForm.genre,
         includeCharacters: projectForm.aiCharacters,
+        includeWorldview: projectForm.aiWorldview,
         includeOutline: projectForm.aiOutline,
         chapterAnalyses: chapterAnalyses.value
       }
@@ -389,6 +504,7 @@ async function runAiAnalysis(): Promise<void> {
     }
     aggregateAnalysis.value = aggregateResult.result as AggregateAnalysis
     includedCharacterNames.value = aggregateAnalysis.value.characters.map((character) => character.name)
+    includedHooks.value = [...aggregateAnalysis.value.pendingHooks]
     analysisProgress.value = 100
     stage.value = 'ai-review'
   } catch (error) {
@@ -410,9 +526,23 @@ function toggleCharacter(name: string, checked: boolean): void {
   includedCharacterNames.value = Array.from(names)
 }
 
+function toggleHook(hook: string, checked: boolean): void {
+  const hooks = new Set(includedHooks.value)
+  if (checked) hooks.add(hook)
+  else hooks.delete(hook)
+  includedHooks.value = Array.from(hooks)
+}
+
+function buildContinuationSummary(): string {
+  const parts = [projectForm.continuationGoal.trim()]
+  if (projectForm.continuationConstraints.trim()) parts.push(`写作约束：${projectForm.continuationConstraints.trim()}`)
+  if (includedHooks.value.length > 0) parts.push(`可承接伏笔：${includedHooks.value.join('；')}`)
+  return parts.filter(Boolean).join('\n') || '承接上一章剧情，保持人物状态与叙事逻辑连续。'
+}
+
 function buildWorkflowDocuments(): ReturnType<typeof createDefaultWorkflowDocuments> {
   const now = new Date().toISOString()
-  const pendingHooks = aggregateAnalysis.value?.pendingHooks ?? []
+  const pendingHooks = includedHooks.value
   const status = aggregateAnalysis.value?.continuationStatus
     || `已导入 ${chapters.value.length} 章，续写从“${projectForm.nextChapterTitle}”开始。`
   const bookSummary = aggregateAnalysis.value?.bookSummary || '原文已导入，尚未生成全书摘要。'
@@ -440,6 +570,21 @@ function buildWorkflowDocuments(): ReturnType<typeof createDefaultWorkflowDocume
   })
 }
 
+async function startStoryStateBackfill(projectId: string): Promise<void> {
+  try {
+    await appStore.persistWorkspace()
+    const response = await window.characterArc.backfillProjectState(toIpcPayload({
+      settings: appStore.appSettings,
+      projectId,
+      selection: { mode: 'pending' }
+    }))
+    if (!response.success) throw new Error(response.error || '状态补录启动失败')
+    message.success('故事状态已转入后台补录，可在项目知识中查看进度')
+  } catch (error) {
+    message.warning(error instanceof Error ? error.message : '故事状态补录启动失败')
+  }
+}
+
 function createContinuationProject(): void {
   if (!projectForm.title.trim()) {
     message.warning('请填写作品名称')
@@ -447,6 +592,10 @@ function createContinuationProject(): void {
   }
   if (chapters.value.length === 0) {
     message.warning('没有可导入的章节')
+    return
+  }
+  if (!projectForm.nextChapterTitle.trim()) {
+    message.warning('请填写续写章节标题')
     return
   }
 
@@ -470,10 +619,12 @@ function createContinuationProject(): void {
   const summaryMap = new Map(chapterAnalyses.value.map((item) => [item.chapterId, item.summary]))
   const outlineItems: OutlineItem[] = []
   const chapterDrafts: ChapterDraft[] = []
+  const importedChapterIdMap = new Map<string, string>()
   chapters.value.forEach((chapter, index) => {
     const volumeId = volumeIdMap.get(chapter.volumeTitle.trim() || '正文') || volumes[0].id
     const outlineId = entityId('outline')
     const chapterId = entityId('chapter')
+    importedChapterIdMap.set(chapter.id, chapterId)
     const summary = projectForm.aiSummaries
       ? summaryMap.get(chapter.id) || 'AI 未覆盖本章，待补充章节摘要。'
       : '原文导入章节，待补充章节摘要。'
@@ -502,13 +653,15 @@ function createContinuationProject(): void {
   const lastVolumeId = chapterDrafts[chapterDrafts.length - 1]?.volumeId || volumes[0].id
   const nextOutlineId = entityId('outline')
   const nextChapterId = entityId('chapter')
+  const continuationSummary = buildContinuationSummary()
+  const nextWordTarget = String(Math.max(500, Math.round(projectForm.nextChapterWordTarget || 3000)))
   outlineItems.push({
     id: nextOutlineId,
     volumeId: lastVolumeId,
     title: projectForm.nextChapterTitle.trim() || buildContinuationChapterTitle(chapters.value.length),
-    wordTarget: '3000',
-    conflict: '待规划续写冲突',
-    summary: '待规划续写内容。',
+    wordTarget: nextWordTarget,
+    conflict: projectForm.continuationGoal.trim() || '承接上一章未解决的核心冲突',
+    summary: continuationSummary,
     status: 'drafting',
     sortOrder: outlineItems.length
   })
@@ -517,9 +670,9 @@ function createContinuationProject(): void {
     outlineItemId: nextOutlineId,
     volumeId: lastVolumeId,
     title: projectForm.nextChapterTitle.trim() || buildContinuationChapterTitle(chapters.value.length),
-    summary: '待规划续写内容。',
+    summary: continuationSummary,
     status: 'draft',
-    wordTarget: '3000',
+    wordTarget: nextWordTarget,
     content: ''
   })
 
@@ -537,7 +690,91 @@ function createContinuationProject(): void {
         }))
     : []
 
-  appStore.createProjectWorkspace({
+  const now = new Date().toISOString()
+  const characterIdByName = new Map(characters.map((character) => [character.name, character.id]))
+  const worldviewEntries: WorldviewEntry[] = projectForm.aiWorldview
+    ? (aggregateAnalysis.value?.worldviewEntries ?? []).map((entry, index) => ({
+        id: entityId('worldview'),
+        type: entry.type || '其他',
+        title: entry.title,
+        content: entry.content,
+        sortOrder: index,
+        createdAt: now,
+        updatedAt: now
+      }))
+    : []
+  const organizations: OrganizationEntry[] = projectForm.aiCharacters
+    ? (aggregateAnalysis.value?.organizations ?? []).map((organization, index) => ({
+        id: entityId('organization'),
+        name: organization.name,
+        type: organization.type || '其他势力',
+        description: organization.description,
+        motto: organization.motto,
+        color: 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)',
+        sortOrder: index,
+        createdAt: now,
+        updatedAt: now
+      }))
+    : []
+  const organizationIdByName = new Map(organizations.map((organization) => [organization.name, organization.id]))
+  const organizationMemberships: OrganizationMembership[] = projectForm.aiCharacters
+    ? (aggregateAnalysis.value?.organizations ?? []).flatMap((organization) => {
+        const organizationId = organizationIdByName.get(organization.name)
+        if (!organizationId) return []
+        return organization.members.flatMap((member) => {
+          const characterId = characterIdByName.get(member.name)
+          return characterId
+            ? [{
+                id: entityId('membership'),
+                characterId,
+                organizationId,
+                role: member.role || '成员',
+                notes: member.notes,
+                createdAt: now,
+                updatedAt: now
+              }]
+            : []
+        })
+      })
+    : []
+  const relationshipKeys = new Set<string>()
+  const characterRelationships: CharacterRelationship[] = projectForm.aiCharacters
+    ? (aggregateAnalysis.value?.relationships ?? []).flatMap((relationship) => {
+        const fromCharacterId = characterIdByName.get(relationship.fromCharacter)
+        const toCharacterId = characterIdByName.get(relationship.toCharacter)
+        const key = [fromCharacterId, toCharacterId].sort().join(':')
+        if (!fromCharacterId || !toCharacterId || fromCharacterId === toCharacterId || relationshipKeys.has(key)) return []
+        relationshipKeys.add(key)
+        return [{
+          id: entityId('relationship'),
+          fromCharacterId,
+          toCharacterId,
+          type: relationship.type || '关联',
+          description: relationship.description,
+          intensity: Math.min(100, Math.max(0, relationship.intensity || 50)),
+          createdAt: now,
+          updatedAt: now
+        }]
+      })
+    : []
+  const fallbackSourceChapterId = chapterDrafts[chapters.value.length - 1]?.id || ''
+  const plotThreads: PlotThread[] = includedHooks.value.map((hook) => {
+    const sourceAnalysis = chapterAnalyses.value.find((analysis) =>
+      analysis.hooks.some((candidate) => candidate === hook || candidate.includes(hook) || hook.includes(candidate))
+    )
+    return {
+      id: entityId('plot-thread'),
+      title: hook.length > 36 ? `${hook.slice(0, 36)}...` : hook,
+      description: hook,
+      openedInChapterId: importedChapterIdMap.get(sourceAnalysis?.chapterId ?? '') || fallbackSourceChapterId,
+      status: 'open',
+      tags: sourceAnalysis?.characters.map((character) => character.name).filter(Boolean).slice(0, 5) ?? [],
+      createdAt: now,
+      updatedAt: now
+    }
+  })
+
+  const projectId = appStore.createProjectWorkspace({
     project: {
       title: projectForm.title.trim(),
       genre: projectForm.genre,
@@ -547,10 +784,66 @@ function createContinuationProject(): void {
     outlineVolumes: volumes,
     outlineItems,
     chapters: chapterDrafts,
-    characters
+    characters,
+    worldviewEntries,
+    organizations,
+    characterRelationships,
+    organizationMemberships,
+    plotThreads
   })
+
+  const knowledgeDocuments: KnowledgeDocument[] = aggregateAnalysis.value
+    ? [
+        {
+          id: entityId('knowledge-overview'),
+          title: `${projectForm.title.trim()} · 续写资料总览`,
+          sourceType: 'canon-fact',
+          sourceLabel: preview.value?.fileName || '续写导入',
+          content: [
+            aggregateAnalysis.value.bookSummary,
+            `当前状态：${aggregateAnalysis.value.continuationStatus}`,
+            includedHooks.value.length ? `待回收伏笔：\n${includedHooks.value.map((hook) => `- ${hook}`).join('\n')}` : ''
+          ].filter(Boolean).join('\n\n'),
+          summary: aggregateAnalysis.value.bookSummary,
+          keywords: [projectForm.genre, ...characters.map((character) => character.name)].filter(Boolean).slice(0, 12),
+          metadata: {
+            source: 'continuation-import',
+            sourceTitle: projectForm.title.trim(),
+            fileName: preview.value?.fileName || ''
+          },
+          createdAt: now,
+          updatedAt: now
+        },
+        ...chapterAnalyses.value.map((analysis) => ({
+          id: entityId('knowledge-chapter'),
+          title: analysis.title,
+          sourceType: 'chapter-summary' as const,
+          sourceLabel: preview.value?.fileName || '续写导入',
+          content: analysis.summary,
+          summary: analysis.summary,
+          keywords: [
+            ...analysis.characters.map((character) => character.name),
+            ...analysis.hooks.slice(0, 4)
+          ].filter(Boolean).slice(0, 12),
+          metadata: {
+            source: 'continuation-import',
+            sourceTitle: projectForm.title.trim(),
+            fileName: preview.value?.fileName || '',
+            chapterId: importedChapterIdMap.get(analysis.chapterId) || ''
+          },
+          createdAt: now,
+          updatedAt: now
+        }))
+      ]
+    : []
+  if (knowledgeDocuments.length) appStore.mergeKnowledgeDocuments(knowledgeDocuments)
   appStore.openChapterStudio(nextChapterId)
-  message.success(`已导入 ${chapters.value.length} 章，续写章节已创建`)
+  if (projectForm.backfillStoryState && projectForm.useAi) {
+    message.success(`已导入 ${chapters.value.length} 章，项目资料已创建，正在准备状态补录`)
+    void startStoryStateBackfill(projectId)
+  } else {
+    message.success(`已导入 ${chapters.value.length} 章，项目资料和续写章节已创建`)
+  }
 }
 </script>
 
@@ -628,6 +921,7 @@ function createContinuationProject(): void {
             <n-input v-model:value="selectedChapter.volumeTitle" placeholder="所属分卷" />
           </div>
           <div class="editor-actions">
+            <button type="button" title="在当前章节后新增" @click="addChapterAfterSelected"><Plus :size="16" /></button>
             <button type="button" title="上移章节" :disabled="selectedChapterIndex <= 0" @click="moveSelectedChapter(-1)"><ChevronUp :size="16" /></button>
             <button type="button" title="下移章节" :disabled="selectedChapterIndex >= chapters.length - 1" @click="moveSelectedChapter(1)"><ChevronDown :size="16" /></button>
             <button type="button" title="从光标处拆分" @click="splitAtCursor"><Scissors :size="16" /></button>
@@ -644,9 +938,17 @@ function createContinuationProject(): void {
         ></textarea>
         <footer class="editor-footer">
           <span>{{ formatNumber(selectedChapter.characterCount) }} 字</span>
-          <n-tag v-if="selectedChapter.confidence !== 'high'" size="small" type="warning" :bordered="false">
-            需要确认
-          </n-tag>
+          <n-button
+            v-if="selectedChapter.confidence !== 'high'"
+            size="tiny"
+            secondary
+            type="warning"
+            @click="confirmSelectedChapter"
+          >
+            <template #icon><Check :size="13" /></template>
+            确认本章
+          </n-button>
+          <n-tag v-else size="small" type="success" :bordered="false">已确认</n-tag>
         </footer>
       </section>
 
@@ -664,6 +966,20 @@ function createContinuationProject(): void {
           <strong>{{ chapters.length }} 章 / {{ volumeCount }} 卷</strong>
           <small>{{ formatNumber(totalCharacterCount) }} 字</small>
         </div>
+        <div v-if="reviewIssues.length" class="issue-block">
+          <span>待处理问题</span>
+          <button
+            v-for="(issue, index) in reviewIssues.slice(0, 8)"
+            :key="`${issue.chapterId}-${issue.label}-${index}`"
+            type="button"
+            @click="focusReviewIssue(issue.chapterId)"
+          >
+            <n-tag size="tiny" type="warning" :bordered="false">{{ issue.label }}</n-tag>
+            <span>{{ issue.detail }}</span>
+          </button>
+          <small v-if="reviewIssues.length > 8">另有 {{ reviewIssues.length - 8 }} 项</small>
+        </div>
+        <div v-else class="review-ready"><Check :size="15" />章节结构已确认</div>
         <n-button type="primary" block @click="proceedToSetup">确认拆章</n-button>
       </aside>
     </main>
@@ -680,7 +996,16 @@ function createContinuationProject(): void {
             <label><span>题材</span><n-select v-model:value="projectForm.genre" :options="genreOptions" filterable /></label>
             <label><span>篇幅</span><n-select v-model:value="projectForm.novelLength" :options="[{ label: '长篇', value: 'long' }, { label: '短篇', value: 'short' }]" /></label>
             <label><span>目标平台</span><n-select v-model:value="projectForm.targetPlatform" :options="platformOptions" filterable tag /></label>
-            <label class="full"><span>续写章节标题</span><n-input v-model:value="projectForm.nextChapterTitle" /></label>
+            <label><span>续写章节标题</span><n-input v-model:value="projectForm.nextChapterTitle" /></label>
+            <label><span>目标字数</span><n-input-number v-model:value="projectForm.nextChapterWordTarget" :min="500" :max="50000" :step="500" /></label>
+            <label class="full">
+              <span>下一章推进目标</span>
+              <n-input v-model:value="projectForm.continuationGoal" type="textarea" :rows="3" placeholder="例如：主角潜入宴会取得账本，但身份在结尾暴露" />
+            </label>
+            <label class="full">
+              <span>必须遵守的约束</span>
+              <n-input v-model:value="projectForm.continuationConstraints" type="textarea" :rows="2" placeholder="例如：保持第三人称；不能揭示反派真实身份；本章不新增主要角色" />
+            </label>
           </div>
         </section>
 
@@ -694,7 +1019,8 @@ function createContinuationProject(): void {
             <n-alert v-if="!hasAiSettings" type="warning" :show-icon="false">需要先在主页设置中配置模型和 API Key。</n-alert>
             <div class="ai-options">
               <n-checkbox v-model:checked="projectForm.aiSummaries">章节摘要</n-checkbox>
-              <n-checkbox v-model:checked="projectForm.aiCharacters">人物卡片</n-checkbox>
+              <n-checkbox v-model:checked="projectForm.aiCharacters">人物、关系与势力</n-checkbox>
+              <n-checkbox v-model:checked="projectForm.aiWorldview">世界观设定</n-checkbox>
               <n-checkbox v-model:checked="projectForm.aiOutline">全书与分卷大纲</n-checkbox>
             </div>
             <label class="scope-field">
@@ -702,7 +1028,17 @@ function createContinuationProject(): void {
               <n-select v-model:value="projectForm.analysisScope" :options="scopeOptions" />
               <small>将分析 {{ analysisChapterCount }} 章，正文会发送给当前模型服务商。</small>
             </label>
+            <label class="state-backfill-option">
+              <n-checkbox v-model:checked="projectForm.backfillStoryState" />
+              <span>
+                <strong>创建后补录故事状态</strong>
+                <small>逐章提取角色位置、状态、持有物和时间线，最多额外调用 AI {{ chapters.length }} 次。</small>
+              </span>
+            </label>
           </template>
+          <n-alert v-else type="warning" :show-icon="false">
+            纯正文导入不会生成角色、关系、世界观、剧情线和可检索摘要，后续续写上下文会不完整。
+          </n-alert>
         </section>
       </div>
 
@@ -744,12 +1080,38 @@ function createContinuationProject(): void {
             </label>
           </div>
         </section>
+        <section class="entity-review">
+          <div class="section-heading"><FileText :size="19" /><div><h2>项目资料</h2><p>以下数据会写入对应工作区模块，并参与后续续写。</p></div></div>
+          <div class="entity-stats">
+            <span><strong>{{ aggregateAnalysis?.worldviewEntries.length ?? 0 }}</strong> 世界观</span>
+            <span><strong>{{ aggregateAnalysis?.organizations.length ?? 0 }}</strong> 势力</span>
+            <span><strong>{{ aggregateAnalysis?.relationships.length ?? 0 }}</strong> 人物关系</span>
+            <span><strong>{{ aggregateAnalysis?.pendingHooks.length ?? 0 }}</strong> 剧情线</span>
+            <span><strong>{{ chapterAnalyses.length }}</strong> 知识摘要</span>
+          </div>
+          <div v-if="aggregateAnalysis?.worldviewEntries.length" class="entity-preview-list">
+            <div v-for="entry in aggregateAnalysis.worldviewEntries" :key="`${entry.type}-${entry.title}`">
+              <n-tag size="tiny" :bordered="false">{{ entry.type }}</n-tag>
+              <strong>{{ entry.title }}</strong>
+              <p>{{ entry.content }}</p>
+            </div>
+          </div>
+        </section>
         <section v-if="projectForm.aiOutline" class="volume-review">
           <div class="section-heading"><BookOpen :size="19" /><div><h2>分卷摘要</h2><p>{{ aggregateAnalysis?.volumeSummaries.length ?? 0 }} 个分卷</p></div></div>
           <div class="volume-list">
             <div v-for="volume in aggregateAnalysis?.volumeSummaries" :key="volume.title">
               <strong>{{ volume.title }}</strong><p>{{ volume.summary }}</p>
             </div>
+          </div>
+        </section>
+        <section v-if="aggregateAnalysis?.pendingHooks.length" class="hook-review">
+          <div class="section-heading"><Sparkles :size="19" /><div><h2>待回收伏笔</h2><p>勾选后会写入项目资料，并作为下一章可承接线索。</p></div></div>
+          <div class="hook-list">
+            <label v-for="hook in aggregateAnalysis.pendingHooks" :key="hook">
+              <n-checkbox :checked="includedHooks.includes(hook)" @update:checked="toggleHook(hook, $event)" />
+              <span>{{ hook }}</span>
+            </label>
           </div>
         </section>
       </div>
@@ -824,12 +1186,17 @@ function createContinuationProject(): void {
 .editor-footer { display: flex; align-items: center; justify-content: space-between; min-height: 40px; padding: 0 14px; border-top: 1px solid var(--arc-border); color: var(--arc-text-hint); font-size: 11px; }
 .review-summary { display: flex; min-height: 0; flex-direction: column; gap: 10px; padding: 12px; border-left: 1px solid var(--arc-border); background: var(--arc-bg-weak); overflow-y: auto; }
 .summary-block { display: flex; flex-direction: column; gap: 5px; padding: 12px 0; border-bottom: 1px solid var(--arc-border); }
-.summary-block span, .summary-block small { color: var(--arc-text-hint); font-size: 11px; }
+.summary-block span, .summary-block small, .issue-block > span, .issue-block > small { color: var(--arc-text-hint); font-size: 11px; }
 .summary-block strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; }
+.issue-block { display: flex; flex-direction: column; gap: 5px; padding: 4px 0 10px; }
+.issue-block button { display: flex; min-width: 0; align-items: center; gap: 7px; padding: 5px 0; border: 0; background: transparent; color: var(--arc-text-secondary); text-align: left; cursor: pointer; }
+.issue-block button:hover { color: var(--arc-primary); }
+.issue-block button > span:last-child { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.review-ready { display: flex; align-items: center; gap: 7px; padding: 8px 0 14px; color: var(--arc-success); font-size: 12px; }
 
 .setup-stage, .ai-review-stage { display: flex; width: min(100%, 920px); min-height: 0; flex: 1; flex-direction: column; margin: 0 auto; }
 .stage-scroll { min-height: 0; flex: 1; overflow-y: auto; scrollbar-gutter: stable; }
-.setup-form, .ai-setup, .analysis-overview, .character-review, .volume-review { padding: 22px 0; border-bottom: 1px solid var(--arc-border); }
+.setup-form, .ai-setup, .analysis-overview, .character-review, .entity-review, .volume-review, .hook-review { padding: 22px 0; border-bottom: 1px solid var(--arc-border); }
 .section-heading { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 18px; color: var(--arc-primary); }
 .section-heading div { flex: 1; }
 .section-heading h2 { margin: 0; color: var(--arc-text-primary); font-size: 16px; letter-spacing: 0; }
@@ -838,9 +1205,14 @@ function createContinuationProject(): void {
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .form-grid label, .scope-field, .analysis-overview label { display: flex; flex-direction: column; gap: 7px; color: var(--arc-text-secondary); font-size: 12px; }
 .form-grid .full { grid-column: 1 / -1; }
+.form-grid :deep(.n-input-number) { width: 100%; }
 .ai-options { display: flex; flex-wrap: wrap; gap: 22px; margin: 16px 0; }
 .scope-field { max-width: 420px; }
 .scope-field small { color: var(--arc-text-hint); line-height: 1.6; }
+.state-backfill-option { display: flex; max-width: 620px; align-items: flex-start; gap: 9px; margin-top: 18px; padding: 12px; border: 1px solid var(--arc-border); border-radius: 6px; background: var(--arc-bg-weak); }
+.state-backfill-option > span { display: flex; flex-direction: column; gap: 3px; }
+.state-backfill-option strong { color: var(--arc-text-primary); font-size: 12px; }
+.state-backfill-option small { color: var(--arc-text-hint); font-size: 11px; line-height: 1.6; }
 .page-actions { display: flex; flex: none; justify-content: flex-end; gap: 10px; padding-top: 22px; }
 .setup-stage > .page-actions, .ai-review-stage > .page-actions { padding-bottom: 2px; background: var(--arc-bg-body); }
 .analysis-overview textarea { min-height: 110px; resize: vertical; padding: 12px; border: 1px solid var(--arc-border); border-radius: 6px; outline: none; background: var(--arc-bg-surface); color: var(--arc-text-primary); font: inherit; line-height: 1.7; }
@@ -852,9 +1224,19 @@ function createContinuationProject(): void {
 .character-item strong { font-size: 13px; }
 .character-item small { color: var(--arc-text-hint); font-size: 11px; }
 .character-item p, .volume-list p { margin: 0; color: var(--arc-text-secondary); font-size: 12px; line-height: 1.6; }
+.entity-stats { display: grid; grid-template-columns: repeat(5, 1fr); border-top: 1px solid var(--arc-border); border-bottom: 1px solid var(--arc-border); }
+.entity-stats span { display: flex; min-width: 0; flex-direction: column; gap: 3px; padding: 12px; color: var(--arc-text-hint); font-size: 11px; text-align: center; }
+.entity-stats span + span { border-left: 1px solid var(--arc-border); }
+.entity-stats strong { color: var(--arc-text-primary); font-size: 17px; }
+.entity-preview-list { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; margin-top: 14px; }
+.entity-preview-list > div { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 7px; padding: 10px 0; border-bottom: 1px solid var(--arc-border); }
+.entity-preview-list strong { min-width: 0; overflow: hidden; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.entity-preview-list p { grid-column: 1 / -1; margin: 0; color: var(--arc-text-secondary); font-size: 11.5px; line-height: 1.6; }
 .volume-list { display: grid; gap: 10px; }
 .volume-list > div { display: grid; grid-template-columns: minmax(140px, 190px) 1fr; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--arc-border); }
 .volume-list strong { font-size: 13px; }
+.hook-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; }
+.hook-list label { display: flex; align-items: flex-start; gap: 8px; padding: 9px 0; color: var(--arc-text-secondary); font-size: 12px; line-height: 1.6; }
 
 @media (max-width: 1100px) {
   .review-stage { grid-template-columns: 220px minmax(400px, 1fr); }
@@ -871,6 +1253,9 @@ function createContinuationProject(): void {
   .step-index { font-size: 11px; }
   .review-stage { grid-template-columns: 180px minmax(320px, 1fr); }
   .editor-toolbar { align-items: stretch; flex-direction: column; }
-  .form-grid, .character-list { grid-template-columns: 1fr; }
+  .form-grid, .character-list, .entity-preview-list, .hook-list { grid-template-columns: 1fr; }
+  .form-grid .full { grid-column: auto; }
+  .entity-stats { grid-template-columns: repeat(3, 1fr); }
+  .entity-stats span + span { border-left: 0; }
 }
 </style>

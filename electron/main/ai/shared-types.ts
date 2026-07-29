@@ -450,6 +450,14 @@ export type ContinuationImportChapterAnalysis = {
   summary: string
   characters: Array<{ name: string; role: string }>
   hooks: string[]
+  worldFacts: Array<{ type: string; title: string; content: string }>
+  organizations: Array<{ name: string; type: string; description: string; members: string[] }>
+  relationships: Array<{
+    fromCharacter: string
+    toCharacter: string
+    type: string
+    description: string
+  }>
 }
 
 export type ContinuationImportChunkResult = {
@@ -465,6 +473,25 @@ export type ContinuationImportAggregateResult = {
     role: string
     description: string
     tags: string[]
+  }>
+  worldviewEntries: Array<{
+    type: string
+    title: string
+    content: string
+  }>
+  organizations: Array<{
+    name: string
+    type: string
+    description: string
+    motto: string
+    members: Array<{ name: string; role: string; notes: string }>
+  }>
+  relationships: Array<{
+    fromCharacter: string
+    toCharacter: string
+    type: string
+    description: string
+    intensity: number
   }>
   volumeSummaries: Array<{ title: string; summary: string }>
 }

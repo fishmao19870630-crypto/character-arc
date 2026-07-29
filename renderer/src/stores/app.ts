@@ -124,6 +124,7 @@ interface ProjectWorkspacePayload {
   outlineItems?: OutlineItem[]
   chapters?: ChapterDraft[]
   chapterVersions?: ChapterVersion[]
+  plotThreads?: PlotThread[]
   messages?: ChatMessage[]
 }
 
@@ -1037,7 +1038,7 @@ export const useAppStore = defineStore('app', () => {
 
   // ── 项目 CRUD ──
   /** 从向导创建完整项目工作区：分配 ID、设置默认分卷和章节、切换到工作台 */
-  function createProjectWorkspace(payload: ProjectWorkspacePayload): void {
+  function createProjectWorkspace(payload: ProjectWorkspacePayload): string {
     const projectId = uniqueId('project')
     const nextVolumes = payload.outlineVolumes?.length ? payload.outlineVolumes : [createWorkspaceVolume()]
     const nextChapters = payload.chapters?.length ? payload.chapters : [buildStarterChapter(nextVolumes[0].id)]
@@ -1075,6 +1076,7 @@ export const useAppStore = defineStore('app', () => {
         outlineItems: payload.outlineItems,
         chapters: nextChapters,
         chapterVersions: payload.chapterVersions,
+        plotThreads: payload.plotThreads,
         messages: payload.messages
       })
     }
@@ -1087,6 +1089,7 @@ export const useAppStore = defineStore('app', () => {
         : 'chapters'
     syncSelectedChapter(projectId)
     schedulePersist('fast')
+    return projectId
   }
 
   /** 快速创建项目（仅标题/题材/长短篇/字数展示），自动生成默认分卷和首章 */
