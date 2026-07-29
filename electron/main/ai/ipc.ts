@@ -7,7 +7,8 @@ import { isToolUseNotSupportedError } from './provider'
 import { setChapterPostGenerationIssuesEmitter, setChapterPostGenerationTaskEmitter, setChapterWarningsEmitter } from './runtime/orchestrator'
 import { retrieveKnowledgeContext } from './knowledge-retrieval'
 import { buildRunMeta } from './runtime/run-meta'
-import { backfillProjectStateFromChapters } from './state-backfill'
+import { backfillProjectStateFromChapters, getProjectBackfillChapterStatuses } from './state-backfill'
+import type { BackfillSelection } from './state-backfill'
 import { buildStoryStateContext } from '../story-state-store'
 import { ensureWorkspaceDb } from '../workspace-store'
 import { runSpiralBootstrap } from './spiral'
@@ -43,6 +44,7 @@ const activeAiStreams = new Map<string, AbortController>()
  * 超时或用户手动取消时通过 `characterarc:ai-cancel` 通道 abort。
  */
 const activeAiTasks = new Map<string, AbortController>()
+const activeBackfillProjects = new Set<string>()
 
 /**
  * 注册所有 AI 相关的 IPC handler。
@@ -521,12 +523,28 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
   })
 
   // ── 已有章节状态补录 ──
-  ipcMain.handle('characterarc:ai-backfill-state', async (event, payload: unknown) => {
+  ipcMain.handle('characterarc:ai-backfill-state-status', async (_event, projectId: unknown) => {
     try {
-      const request = payload as { settings?: AppSettings; projectId?: string }
+      const normalizedProjectId = String(projectId ?? '').trim()
+      if (!normalizedProjectId) throw new Error('缺少 projectId。')
+      return { success: true, result: await getProjectBackfillChapterStatuses(normalizedProjectId) }
+    } catch (error) {
+      return { success: false, error: formatAiErrorMessage(error, '读取状态补录进度失败') }
+    }
+  })
+
+  ipcMain.handle('characterarc:ai-backfill-state', async (event, payload: unknown) => {
+    let activeProjectId = ''
+    try {
+      const request = payload as { settings?: AppSettings; projectId?: string; selection?: BackfillSelection }
       const projectId = String(request?.projectId ?? '').trim()
       if (!projectId) throw new Error('缺少 projectId。')
       if (!request?.settings) throw new Error('缺少 AI 设置。')
+      if (activeBackfillProjects.has(projectId)) {
+        throw new Error('该项目已有状态补录任务正在进行，请等待当前任务完成。')
+      }
+      activeBackfillProjects.add(projectId)
+      activeProjectId = projectId
 
       const result = await backfillProjectStateFromChapters(
         request.settings,
@@ -537,6 +555,7 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
           }
         },
         {
+          selection: request.selection,
           onChapterRun: (run) => {
             const meta = buildRunMeta(
               'state-backfill',
@@ -560,6 +579,8 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
       return { success: true, result }
     } catch (error) {
       return { success: false, error: formatAiErrorMessage(error, '状态补录失败') }
+    } finally {
+      if (activeProjectId) activeBackfillProjects.delete(activeProjectId)
     }
   })
 }

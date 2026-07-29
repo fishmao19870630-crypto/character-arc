@@ -213,6 +213,18 @@ declare global {
     errors: Array<{ chapterTitle: string; message: string }>
   }
 
+  type CharacterArcBackfillChapterStatus = {
+    chapterId: string
+    chapterTitle: string
+    chapterIndex: number
+    chapterNumber: number
+    contentHash: string
+    status: 'running' | 'success' | 'skipped' | 'failed' | 'unscanned' | 'stale'
+    attemptCount: number
+    error: string
+    updatedAt: string
+  }
+
   interface Window {
     characterArc: {
       platform: string
@@ -298,9 +310,21 @@ declare global {
         error?: string
       }>
       onSpiralProgress: (callback: (payload: { phase: 'seed' | 'expand' | 'validate'; status: 'running' | 'done' | 'error'; error?: string }) => void) => () => void
-      backfillProjectState: (payload: { settings: import('@/types/app').AppSettings; projectId: string }) => Promise<{
+      backfillProjectState: (payload: {
+        settings: import('@/types/app').AppSettings
+        projectId: string
+        selection?: {
+          mode?: 'pending' | 'failed' | 'custom'
+          chapterIds?: string[]
+        }
+      }) => Promise<{
         success: boolean
         result?: CharacterArcBackfillStateResult
+        error?: string
+      }>
+      readBackfillStateStatus: (projectId: string) => Promise<{
+        success: boolean
+        result?: CharacterArcBackfillChapterStatus[]
         error?: string
       }>
       onBackfillStateProgress: (callback: (payload: CharacterArcBackfillStateProgressPayload) => void) => () => void

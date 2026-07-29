@@ -94,6 +94,170 @@ export interface StateDelta {
   }
 }
 
+type UnknownRecord = Record<string, unknown>
+
+function asRecord(value: unknown): UnknownRecord {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+    ? value as UnknownRecord
+    : {}
+}
+
+function asItems(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value
+  return value != null && typeof value === 'object' ? [value] : []
+}
+
+function asString(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+    ? String(value).trim()
+    : ''
+}
+
+function asOptionalNumber(value: unknown): number | undefined {
+  const number = typeof value === 'number' ? value : Number(asString(value))
+  return Number.isFinite(number) ? number : undefined
+}
+
+function uniqueStrings(value: unknown): string[] {
+  const values = Array.isArray(value) ? value : []
+  return [...new Set(values.map(asString).filter(Boolean))]
+}
+
+function uniqueBy<T>(items: T[], keyOf: (item: T) => string): T[] {
+  const seen = new Set<string>()
+  return items.filter((item) => {
+    const key = keyOf(item)
+    if (!key || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+/** 将不可信的模型输出收敛为可安全遍历、可写入 SQLite 的状态增量。 */
+export function normalizeStateDelta(value: unknown): StateDelta {
+  const root = asRecord(value)
+
+  const charactersUpdated = asItems(root.characters_updated).flatMap((item) => {
+    const record = asRecord(item)
+    const characterId = asString(record.character_id)
+    if (!characterId) return []
+    const rawChanges = asRecord(record.changes)
+    const changes: StateDelta['characters_updated'][number]['changes'] = {}
+    const rawLocation = asRecord(rawChanges.location)
+    const locationTo = asString(rawLocation.to)
+    if (locationTo) {
+      changes.location = { from: asString(rawLocation.from), to: locationTo }
+    }
+
+    const scalarFields = [
+      ['physical_state', 'physical_state'],
+      ['mental_state', 'mental_state'],
+      ['arc_progression', 'arc_progression'],
+      ['power_level', 'power_level']
+    ] as const
+    for (const [sourceKey, targetKey] of scalarFields) {
+      const normalized = asString(rawChanges[sourceKey])
+      if (normalized) changes[targetKey] = normalized
+    }
+
+    const rawInventory = asRecord(rawChanges.inventory_delta)
+    const inventoryAdded = uniqueStrings(rawInventory.added)
+    const inventoryRemoved = uniqueStrings(rawInventory.removed)
+    if (inventoryAdded.length || inventoryRemoved.length) {
+      changes.inventory_delta = { added: inventoryAdded, removed: inventoryRemoved }
+    }
+
+    const newKnowledge = uniqueStrings(rawChanges.new_knowledge)
+    if (newKnowledge.length) changes.new_knowledge = newKnowledge
+
+    const rawGoals = asRecord(rawChanges.goals_update)
+    const goalsCompleted = uniqueStrings(rawGoals.completed)
+    const goalsAdded = uniqueStrings(rawGoals.added)
+    if (goalsCompleted.length || goalsAdded.length) {
+      changes.goals_update = { completed: goalsCompleted, added: goalsAdded }
+    }
+
+    return Object.keys(changes).length ? [{ character_id: characterId, changes }] : []
+  })
+
+  const relationshipsDelta = asItems(root.relationships_delta).flatMap((item) => {
+    const record = asRecord(item)
+    const relationshipId = asString(record.relationship_id)
+    if (!relationshipId) return []
+    const rawParticipants = Array.isArray(record.participants) ? record.participants.map(asString).filter(Boolean) : []
+    const rawStatus = asRecord(record.status_change)
+    const statusTo = asString(rawStatus.to)
+    const normalized = {
+      relationship_id: relationshipId,
+      participants: rawParticipants.length >= 2
+        ? [rawParticipants[0], rawParticipants[1]] as [string, string]
+        : undefined,
+      status_change: statusTo
+        ? { from: asString(rawStatus.from), to: statusTo, pivot_event: asString(rawStatus.pivot_event) }
+        : undefined,
+      new_tension_points: uniqueStrings(record.new_tension_points)
+    }
+    return normalized.participants || normalized.status_change || normalized.new_tension_points.length
+      ? [normalized]
+      : []
+  })
+
+  const rawForeshadowing = asRecord(root.foreshadowing_delta)
+  const planted = asItems(rawForeshadowing.planted).flatMap((item) => {
+    const record = asRecord(item)
+    const id = asString(record.id)
+    if (!id) return []
+    const description = asString(record.description)
+    if (!description) return []
+    return [{
+      id,
+      type: asString(record.type) || '暗线',
+      description,
+      method: asString(record.method),
+      payoff_chapter: asOptionalNumber(record.payoff_chapter)
+    }]
+  })
+  const advanced = asItems(rawForeshadowing.advanced).flatMap((item) => {
+    const record = asRecord(item)
+    const id = asString(record.id)
+    return id ? [{ id, clue: asString(record.clue), method: asString(record.method) }] : []
+  })
+  const resolved = asItems(rawForeshadowing.resolved).flatMap((item) => {
+    const record = asRecord(item)
+    const id = asString(record.id)
+    return id ? [{ id, method: asString(record.method), impact: asString(record.impact) }] : []
+  })
+
+  const rawTimeline = asRecord(root.timeline)
+  return {
+    characters_updated: uniqueBy(charactersUpdated, (item) => item.character_id),
+    relationships_delta: uniqueBy(relationshipsDelta, (item) => item.relationship_id),
+    foreshadowing_delta: {
+      planted: uniqueBy(planted, (item) => item.id),
+      advanced: uniqueBy(advanced, (item) => `${item.id}\u0000${item.clue}\u0000${item.method}`),
+      resolved: uniqueBy(resolved, (item) => item.id)
+    },
+    timeline: {
+      story_time_elapsed: asString(rawTimeline.story_time_elapsed),
+      current_story_date: asString(rawTimeline.current_story_date),
+      events: uniqueStrings(rawTimeline.events),
+      world_state_changes: uniqueStrings(rawTimeline.world_state_changes)
+    }
+  }
+}
+
+export function hasStateDeltaContent(delta: StateDelta): boolean {
+  return delta.characters_updated.length > 0
+    || delta.relationships_delta.length > 0
+    || delta.foreshadowing_delta.planted.length > 0
+    || delta.foreshadowing_delta.advanced.length > 0
+    || delta.foreshadowing_delta.resolved.length > 0
+    || delta.timeline.events.length > 0
+    || Boolean(delta.timeline.world_state_changes?.length)
+    || Boolean(delta.timeline.current_story_date)
+    || Boolean(delta.timeline.story_time_elapsed)
+}
+
 export interface ForeshadowingHealthReport {
   totalActive: number
   overdue: Array<{ id: string; plantedChapter: number; expectedPayoff: number }>
@@ -419,12 +583,13 @@ export function applyStateDelta(
   chapterIndex: number,
   delta: StateDelta
 ): void {
+  const normalizedDelta = normalizeStateDelta(delta)
   db.exec('BEGIN')
   try {
   const timestamp = now()
 
   // Character state updates
-  for (const charUpdate of delta.characters_updated) {
+  for (const charUpdate of normalizedDelta.characters_updated) {
     const existing = getLatestCharacterStates(db, projectId, [charUpdate.character_id])
     const prev = existing[0]
 
@@ -439,13 +604,13 @@ export function applyStateDelta(
     if (charUpdate.changes.inventory_delta) {
       const { added = [], removed = [] } = charUpdate.changes.inventory_delta
       inventory = inventory.filter((item) => !removed.includes(item))
-      inventory.push(...added)
+      inventory = [...new Set([...inventory, ...added])]
     }
     const inventoryJson = JSON.stringify(inventory)
 
     let knowledge = prev?.knowledge ?? []
     if (charUpdate.changes.new_knowledge?.length) {
-      knowledge = [...knowledge, ...charUpdate.changes.new_knowledge]
+      knowledge = [...new Set([...knowledge, ...charUpdate.changes.new_knowledge])]
     }
     const knowledgeJson = JSON.stringify(knowledge)
 
@@ -453,7 +618,7 @@ export function applyStateDelta(
     if (charUpdate.changes.goals_update) {
       const { completed = [], added = [] } = charUpdate.changes.goals_update
       goals = goals.filter((g) => !completed.includes(g))
-      goals.push(...added)
+      goals = [...new Set([...goals, ...added])]
     }
     const goalsJson = JSON.stringify(goals)
 
@@ -473,7 +638,7 @@ export function applyStateDelta(
   }
 
   // Relationship updates
-  for (const relUpdate of delta.relationships_delta) {
+  for (const relUpdate of normalizedDelta.relationships_delta) {
     const existingStmt = db.prepare(
       `SELECT * FROM story_relationships WHERE project_id = ? AND relationship_id = ?`
     )
@@ -490,7 +655,7 @@ export function applyStateDelta(
       if (relUpdate.new_tension_points?.length) {
         const existing = parseJson<string[]>(existingRow.tension_points_json, [])
         updates.push('tension_points_json = ?')
-        params.push(JSON.stringify([...existing, ...relUpdate.new_tension_points]))
+        params.push(JSON.stringify([...new Set([...existing, ...relUpdate.new_tension_points])]))
       }
       updates.push('last_interaction_chapter = ?')
       params.push(chapterIndex)
@@ -520,8 +685,8 @@ export function applyStateDelta(
   }
 
   // Foreshadowing updates
-  if (delta.foreshadowing_delta) {
-    for (const planted of delta.foreshadowing_delta.planted) {
+  if (normalizedDelta.foreshadowing_delta) {
+    for (const planted of normalizedDelta.foreshadowing_delta.planted) {
       db.prepare(`
         INSERT OR IGNORE INTO story_foreshadowing
           (id, project_id, foreshadowing_id, type, description, status, planted_chapter,
@@ -533,14 +698,17 @@ export function applyStateDelta(
       )
     }
 
-    for (const advanced of delta.foreshadowing_delta.advanced) {
+    for (const advanced of normalizedDelta.foreshadowing_delta.advanced) {
       const row = db.prepare(
         `SELECT clues_json FROM story_foreshadowing WHERE project_id = ? AND foreshadowing_id = ?`
       ).get(projectId, advanced.id) as Record<string, unknown> | undefined
 
       if (row) {
         const clues = parseJson<Foreshadowing['clues']>(row.clues_json, [])
-        clues.push({ chapter: chapterIndex, clue: advanced.clue, method: advanced.method })
+        const nextClue = { chapter: chapterIndex, clue: advanced.clue, method: advanced.method }
+        if (!clues.some((item) => item.chapter === nextClue.chapter && item.clue === nextClue.clue && item.method === nextClue.method)) {
+          clues.push(nextClue)
+        }
         db.prepare(`
           UPDATE story_foreshadowing
           SET clues_json = ?, status = 'advanced', updated_at = ?
@@ -549,7 +717,7 @@ export function applyStateDelta(
       }
     }
 
-    for (const resolved of delta.foreshadowing_delta.resolved) {
+    for (const resolved of normalizedDelta.foreshadowing_delta.resolved) {
       db.prepare(`
         UPDATE story_foreshadowing
         SET status = 'resolved', resolved_chapter = ?, updated_at = ?
@@ -559,16 +727,16 @@ export function applyStateDelta(
   }
 
   // Timeline
-  if (delta.timeline) {
+  if (normalizedDelta.timeline) {
     db.prepare(`
       INSERT OR REPLACE INTO story_timeline
         (id, project_id, chapter_index, story_date, events_json, world_state_changes_json, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(
       uid(), projectId, chapterIndex,
-      delta.timeline.current_story_date ?? '',
-      JSON.stringify(delta.timeline.events ?? []),
-      JSON.stringify(delta.timeline.world_state_changes ?? []),
+      normalizedDelta.timeline.current_story_date ?? '',
+      JSON.stringify(normalizedDelta.timeline.events ?? []),
+      JSON.stringify(normalizedDelta.timeline.world_state_changes ?? []),
       timestamp
     )
   }

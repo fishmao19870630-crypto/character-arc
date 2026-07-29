@@ -3,6 +3,15 @@ import { extractStateDeltaViaLLMWithDiagnostics } from './runtime/orchestrator'
 import type { AiRunUsage, AppSettings } from './shared-types'
 import { ensureWorkspaceDb } from '../workspace-store'
 import { normalizeSettings, validateSettings } from './settings'
+import {
+  beginBackfillChapter,
+  buildBackfillContentHash,
+  finishBackfillChapter,
+  readBackfillChapterStatuses,
+  selectBackfillChapterStatuses
+} from './state-backfill-store'
+import type { BackfillChapterStatus, BackfillSelection } from './state-backfill-store'
+export type { BackfillSelection } from './state-backfill-store'
 
 /**
  * 状态补录进度回调的 payload 类型。
@@ -49,6 +58,12 @@ export type BackfillChapterRunPayload = {
 
 export type BackfillOptions = {
   onChapterRun?: (payload: BackfillChapterRunPayload) => void
+  selection?: BackfillSelection
+}
+
+export async function getProjectBackfillChapterStatuses(projectId: string): Promise<BackfillChapterStatus[]> {
+  const db = await ensureWorkspaceDb()
+  return readBackfillChapterStatuses(db, projectId)
 }
 
 /**
@@ -65,12 +80,19 @@ export async function backfillProjectStateFromChapters(
   validateSettings(normalizedSettings)
   const db = await ensureWorkspaceDb()
 
-  const chapters = db.prepare(`
+  const chapterRows = db.prepare(`
     SELECT id, title, content, sort_order AS sortOrder
     FROM chapters
     WHERE project_id = ? AND content IS NOT NULL AND LENGTH(content) >= 50
-    ORDER BY sort_order ASC
+    ORDER BY sort_order ASC, rowid ASC
   `).all(projectId) as Array<{ id: string; title: string; content: string; sortOrder: number }>
+  const chapterById = new Map(chapterRows.map((chapter) => [chapter.id, chapter]))
+  const statuses = readBackfillChapterStatuses(db, projectId)
+  const selectedStatuses = selectBackfillChapterStatuses(statuses, options.selection)
+  const chapters = selectedStatuses.flatMap((status) => {
+    const chapter = chapterById.get(status.chapterId)
+    return chapter ? [{ ...chapter, contentHash: status.contentHash }] : []
+  })
 
   let processed = 0
   let skipped = 0
@@ -82,14 +104,38 @@ export async function backfillProjectStateFromChapters(
     const chapterTitle = ch.title || `第 ${i + 1} 章`
     onProgress({ projectId, current: i + 1, total: chapters.length, chapterTitle, phase: 'extracting' })
     const startedAt = new Date().toISOString()
+    beginBackfillChapter(db, {
+      projectId,
+      chapterId: ch.id,
+      chapterTitle,
+      chapterIndex: ch.sortOrder,
+      contentHash: ch.contentHash
+    })
 
     try {
       const preState = buildStoryStateContext(db, projectId, [])
-      const deltaResult = await extractStateDeltaViaLLMWithDiagnostics(normalizedSettings, ch.content, preState)
+      let deltaResult = await extractStateDeltaViaLLMWithDiagnostics(normalizedSettings, ch.content, preState)
+      if (deltaResult.issue) {
+        deltaResult = await extractStateDeltaViaLLMWithDiagnostics(normalizedSettings, ch.content, preState)
+      }
       const delta = deltaResult.delta
       if (delta) {
+        const currentContentRow = db.prepare(`
+          SELECT content FROM chapters WHERE project_id = ? AND id = ?
+        `).get(projectId, ch.id) as { content?: unknown } | undefined
+        const currentContent = typeof currentContentRow?.content === 'string' ? currentContentRow.content : ''
+        if (!currentContent || buildBackfillContentHash(currentContent) !== ch.contentHash) {
+          throw new Error('章节正文在扫描期间发生变化，本次结果未写入，请重新扫描该章。')
+        }
         onProgress({ projectId, current: i + 1, total: chapters.length, chapterTitle, phase: 'applying' })
         applyStateDelta(db, projectId, ch.sortOrder, delta)
+        finishBackfillChapter(db, {
+          projectId,
+          chapterId: ch.id,
+          contentHash: ch.contentHash,
+          status: 'success',
+          delta
+        })
         processed++
         options.onChapterRun?.({
           projectId,
@@ -106,6 +152,13 @@ export async function backfillProjectStateFromChapters(
       } else if (deltaResult.issue) {
         const message = deltaResult.issue.detail || deltaResult.issue.message
         failed++
+        finishBackfillChapter(db, {
+          projectId,
+          chapterId: ch.id,
+          contentHash: ch.contentHash,
+          status: 'failed',
+          error: message
+        })
         errors.push({ chapterTitle, message })
         onProgress({ projectId, current: i + 1, total: chapters.length, chapterTitle, phase: 'failed', message })
         options.onChapterRun?.({
@@ -124,6 +177,12 @@ export async function backfillProjectStateFromChapters(
         const message = 'AI 未提取到可写入的状态变更。'
         onProgress({ projectId, current: i + 1, total: chapters.length, chapterTitle, phase: 'skipped', message })
         skipped++
+        finishBackfillChapter(db, {
+          projectId,
+          chapterId: ch.id,
+          contentHash: ch.contentHash,
+          status: 'skipped'
+        })
         options.onChapterRun?.({
           projectId,
           chapterId: ch.id,
@@ -139,6 +198,13 @@ export async function backfillProjectStateFromChapters(
     } catch (error) {
       const message = error instanceof Error ? error.message : '状态补录失败'
       failed++
+      finishBackfillChapter(db, {
+        projectId,
+        chapterId: ch.id,
+        contentHash: ch.contentHash,
+        status: 'failed',
+        error: message
+      })
       errors.push({ chapterTitle, message })
       onProgress({ projectId, current: i + 1, total: chapters.length, chapterTitle, phase: 'failed', message })
       options.onChapterRun?.({

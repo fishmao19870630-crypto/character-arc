@@ -148,6 +148,7 @@ contextBridge.exposeInMainWorld('characterArc', {
   },
   /** 触发"从已有章节补录项目状态库"任务，返回汇总结果 */
   backfillProjectState: (payload: unknown) => ipcRenderer.invoke('characterarc:ai-backfill-state', toIpcPayload(payload)),
+  readBackfillStateStatus: (projectId: string) => ipcRenderer.invoke('characterarc:ai-backfill-state-status', projectId),
   /** 监听状态补录进度事件 */
   onBackfillStateProgress: (callback: (payload: unknown) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload)

@@ -4,15 +4,11 @@ import type { ZodTypeAny } from 'zod'
 import { buildSystemPrompt, createModel, providerSupportsNativeStructuredOutput } from './provider'
 import type { AiRunUsage, AppSettings, AiStreamHandlers, PromptPair } from './shared-types'
 import { stripReasoningMarkup } from './reasoning'
+import { isOpenAIReasoningChatModel, resolveProviderOptions } from './request-options'
 
 function useStreamFallback(settings: AppSettings): boolean {
   return settings.provider === 'anthropic'
     || (settings.provider === 'openai-compatible' && isOpenAIReasoningChatModel(settings))
-}
-
-function isOpenAIReasoningChatModel(settings: AppSettings): boolean {
-  const model = settings.model?.trim().toLowerCase() || ''
-  return /^(gpt-5|o1|o3|o4-mini)/.test(model)
 }
 
 function shouldRetryGenericUpstreamError(settings: AppSettings, error: unknown): boolean {
@@ -22,8 +18,6 @@ function shouldRetryGenericUpstreamError(settings: AppSettings, error: unknown):
   return error instanceof Error && error.message.toLowerCase().includes('upstream request failed')
 }
 
-type AiProviderOptions = Parameters<typeof generateText>[0]['providerOptions']
-
 function resolveSamplingOptions(settings: AppSettings): { temperature?: number; topP?: number } {
   if (isOpenAIReasoningChatModel(settings)) {
     return {}
@@ -32,18 +26,6 @@ function resolveSamplingOptions(settings: AppSettings): { temperature?: number; 
   return {
     temperature: typeof settings.temperature === 'number' && Number.isFinite(settings.temperature) ? settings.temperature : undefined,
     topP: typeof settings.topP === 'number' && Number.isFinite(settings.topP) ? settings.topP : undefined
-  }
-}
-
-function resolveProviderOptions(settings: AppSettings, options?: AiGenerateOptions): AiProviderOptions | undefined {
-  if (!options?.disableReasoning) {
-    return undefined
-  }
-
-  return {
-    openai: {
-      reasoningEffort: 'none'
-    }
   }
 }
 

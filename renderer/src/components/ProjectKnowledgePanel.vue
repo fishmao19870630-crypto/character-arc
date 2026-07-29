@@ -9,11 +9,14 @@ import {
   NCollapse,
   NCollapseItem,
   NEmpty,
+  NInputNumber,
   NModal,
   NScrollbar,
+  NSelect,
   NSpace,
   NSpin,
   NTag,
+  NVirtualList,
   useDialog,
   useMessage
 } from 'naive-ui'
@@ -36,6 +39,11 @@ type StoryState = NonNullable<Awaited<ReturnType<typeof window.characterArc.read
 const isRunningStoryAudit = ref(false)
 const isBackfillingState = ref(false)
 const backfillProgress = ref<CharacterArcBackfillStateProgressPayload | null>(null)
+const backfillStatuses = ref<CharacterArcBackfillChapterStatus[]>([])
+const isLoadingBackfillStatuses = ref(false)
+const backfillMode = ref<'pending' | 'failed' | 'range'>('pending')
+const rangeStart = ref(1)
+const rangeEnd = ref(1)
 const storyState = ref<StoryState | null>(null)
 const isLoadingStoryState = ref(false)
 
@@ -98,6 +106,28 @@ async function loadStoryState(): Promise<void> {
     isLoadingStoryState.value = false
   }
 }
+
+async function loadBackfillStatuses(): Promise<void> {
+  const project = appStore.currentProject
+  if (!project) {
+    backfillStatuses.value = []
+    return
+  }
+  isLoadingBackfillStatuses.value = true
+  try {
+    const response = await window.characterArc.readBackfillStateStatus(project.id)
+    if (!response.success || !response.result) {
+      throw new Error(response.error ?? '读取补录状态失败')
+    }
+    backfillStatuses.value = response.result
+    rangeEnd.value = Math.max(rangeStart.value, response.result.length || 1)
+  } catch (error) {
+    backfillStatuses.value = []
+    message.error(error instanceof Error ? error.message : '读取补录状态失败')
+  } finally {
+    isLoadingBackfillStatuses.value = false
+  }
+}
 const selectedAuditReport = ref<KnowledgeDocument | null>(null)
 const selectedKnowledgeDocument = ref<KnowledgeDocument | null>(null)
 const knowledgeHistoryRef = ref<HTMLElement | null>(null)
@@ -112,12 +142,14 @@ onBeforeUnmount(() => {
 
 onMounted(() => {
   void loadStoryState()
+  void loadBackfillStatuses()
 })
 
 watch(
   () => appStore.currentProject?.id,
   () => {
     void loadStoryState()
+    void loadBackfillStatuses()
   }
 )
 
@@ -139,6 +171,63 @@ const chapterCount = computed(() => appStore.chapters.length)
 const validChapterCount = computed(
   () => appStore.chapters.filter((ch) => ch.content && ch.content.trim().length >= 50).length
 )
+
+const backfillModeOptions = [
+  { label: '未完成章节', value: 'pending' },
+  { label: '仅失败章节', value: 'failed' },
+  { label: '指定章节范围', value: 'range' }
+]
+
+const backfillStatusMeta: Record<CharacterArcBackfillChapterStatus['status'], {
+  label: string
+  type: 'success' | 'warning' | 'info' | 'error' | 'default'
+}> = {
+  unscanned: { label: '未扫描', type: 'default' },
+  running: { label: '上次中断', type: 'warning' },
+  success: { label: '已补录', type: 'success' },
+  skipped: { label: '已扫描·无变更', type: 'info' },
+  failed: { label: '扫描失败', type: 'error' },
+  stale: { label: '正文已变化', type: 'warning' }
+}
+
+function resolveBackfillStatusMeta(status: unknown): (typeof backfillStatusMeta)[CharacterArcBackfillChapterStatus['status']] {
+  const normalized = String(status) as CharacterArcBackfillChapterStatus['status']
+  return backfillStatusMeta[normalized] ?? backfillStatusMeta.unscanned
+}
+
+const backfillStatusCounts = computed(() => {
+  const counts = { completed: 0, pending: 0, failed: 0 }
+  for (const status of backfillStatuses.value) {
+    if (status.status === 'success' || status.status === 'skipped') counts.completed++
+    else if (status.status === 'failed' || status.status === 'running') counts.failed++
+    else counts.pending++
+  }
+  return counts
+})
+
+const selectedBackfillChapterIds = computed(() => {
+  const statuses = backfillStatuses.value
+  if (backfillMode.value === 'failed') {
+    return statuses
+      .filter((status) => status.status === 'failed' || status.status === 'running')
+      .map((status) => status.chapterId)
+  }
+  if (backfillMode.value === 'range') {
+    const start = Math.min(rangeStart.value, rangeEnd.value)
+    const end = Math.max(rangeStart.value, rangeEnd.value)
+    return statuses
+      .filter((status) => (
+        status.chapterNumber >= start
+        && status.chapterNumber <= end
+        && status.status !== 'success'
+        && status.status !== 'skipped'
+      ))
+      .map((status) => status.chapterId)
+  }
+  return statuses
+    .filter((status) => status.status !== 'success' && status.status !== 'skipped')
+    .map((status) => status.chapterId)
+})
 
 const backfillButtonLabel = computed(() => {
   if (!isBackfillingState.value) return '从已有章节补录状态'
@@ -221,14 +310,16 @@ function runStateBackfill(): void {
     message.info('上一次状态补录还在进行中，请稍候。')
     return
   }
-  if (!validChapterCount.value) {
-    message.warning('当前项目还没有正文可以补录状态。')
+  if (!selectedBackfillChapterIds.value.length) {
+    message.info('当前选择中没有需要补录的章节。')
     return
   }
 
+  const selectedCount = selectedBackfillChapterIds.value.length
+
   dialog.warning({
     title: '从已有章节补录状态库',
-    content: `将对 ${validChapterCount.value} 个已有章节逐章调用 AI 提取状态变更并写入状态库。这会消耗较多 token（约 ${validChapterCount.value} 次 AI 调用）。确认继续？`,
+    content: `将对 ${selectedCount} 个章节逐章提取状态变更，预计调用 AI ${selectedCount} 次。已完成且正文未变化的章节不会重复扫描。确认继续？`,
     positiveText: '开始补录',
     negativeText: '取消',
     onPositiveClick: async () => {
@@ -241,9 +332,15 @@ function runStateBackfill(): void {
 
 async function runStateBackfillTask(projectId: string): Promise<void> {
   try {
+    const selection = backfillMode.value === 'failed'
+      ? { mode: 'failed' as const }
+      : backfillMode.value === 'range'
+        ? { mode: 'custom' as const, chapterIds: selectedBackfillChapterIds.value }
+        : { mode: 'pending' as const }
     const response = await window.characterArc.backfillProjectState(toIpcPayload({
       settings: appStore.appSettings,
-      projectId
+      projectId,
+      selection
     }))
     if (!response.success || !response.result) {
       throw new Error(response.error ?? '状态补录失败')
@@ -262,6 +359,7 @@ async function runStateBackfillTask(projectId: string): Promise<void> {
     isBackfillingState.value = false
     backfillProgress.value = null
     void loadStoryState()
+    void loadBackfillStatuses()
   }
 }
 
@@ -379,7 +477,7 @@ watch(
           <n-button
             size="small"
             :loading="isBackfillingState"
-            :disabled="!appStore.currentProject || isBackfillingState || !validChapterCount"
+            :disabled="!appStore.currentProject || isBackfillingState || isLoadingBackfillStatuses || !selectedBackfillChapterIds.length"
             @click="runStateBackfill"
           >
             <template #icon><Sparkles :size="14" /></template>
@@ -388,12 +486,37 @@ watch(
         </template>
 
         <p class="pk-card-desc">
-          适用于已有章节但状态库为空的老项目：遍历所有已写章节，逐章调用 AI 提取角色状态、伏笔、关系等结构化数据。
-          补录后，写作时才能用上世界状态注入。
+          按章节补录角色状态、伏笔、关系等结构化数据；扫描结果会保留，正文未变化的已完成章节不会重复处理。
         </p>
+
+        <div class="pk-backfill-controls">
+          <label class="pk-backfill-field">
+            <span>扫描范围</span>
+            <n-select
+              v-model:value="backfillMode"
+              size="small"
+              :options="backfillModeOptions"
+              :disabled="isBackfillingState"
+            />
+          </label>
+          <template v-if="backfillMode === 'range'">
+            <label class="pk-backfill-field pk-backfill-field--number">
+              <span>起始章节</span>
+              <n-input-number v-model:value="rangeStart" size="small" :min="1" :max="Math.max(1, backfillStatuses.length)" />
+            </label>
+            <label class="pk-backfill-field pk-backfill-field--number">
+              <span>结束章节</span>
+              <n-input-number v-model:value="rangeEnd" size="small" :min="1" :max="Math.max(1, backfillStatuses.length)" />
+            </label>
+          </template>
+        </div>
 
         <div class="pk-card-meta">
           <n-tag size="small" :bordered="false">可补录章节 {{ validChapterCount }}</n-tag>
+          <n-tag size="small" :bordered="false" type="success">已完成 {{ backfillStatusCounts.completed }}</n-tag>
+          <n-tag size="small" :bordered="false" type="warning">待补录 {{ backfillStatusCounts.pending }}</n-tag>
+          <n-tag v-if="backfillStatusCounts.failed" size="small" :bordered="false" type="error">失败/中断 {{ backfillStatusCounts.failed }}</n-tag>
+          <n-tag size="small" :bordered="false" type="info">本次 {{ selectedBackfillChapterIds.length }}</n-tag>
           <n-tag v-if="isBackfillingState && backfillProgress" size="small" type="warning" :bordered="false">
             进度 {{ backfillProgress.current }} / {{ backfillProgress.total }}
           </n-tag>
@@ -404,6 +527,29 @@ watch(
             <br>{{ backfillProgress.message }}
           </template>
         </n-alert>
+        <n-spin :show="isLoadingBackfillStatuses">
+          <n-virtual-list
+            v-if="backfillStatuses.length"
+            class="pk-backfill-list"
+            style="max-height: 230px;"
+            :items="backfillStatuses"
+            :item-size="50"
+            item-resizable
+          >
+            <template #default="{ item: status }">
+              <div :key="status.chapterId" class="pk-backfill-row">
+                <span class="pk-backfill-chapter-number">{{ status.chapterNumber }}</span>
+                <div class="pk-backfill-row-main">
+                  <strong>{{ status.chapterTitle }}</strong>
+                  <span v-if="status.error" class="pk-backfill-error" :title="status.error">{{ status.error }}</span>
+                </div>
+                <n-tag size="tiny" :bordered="false" :type="resolveBackfillStatusMeta(status.status).type">
+                  {{ resolveBackfillStatusMeta(status.status).label }}
+                </n-tag>
+              </div>
+            </template>
+          </n-virtual-list>
+        </n-spin>
       </n-card>
     </div>
 
@@ -740,6 +886,85 @@ watch(
 
 .pk-card-progress {
   margin-top: 10px;
+}
+
+.pk-backfill-controls {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.pk-backfill-field {
+  display: grid;
+  gap: 5px;
+  min-width: 180px;
+  color: var(--arc-text-secondary);
+  font-size: 12px;
+}
+
+.pk-backfill-field--number {
+  min-width: 112px;
+  width: 128px;
+}
+
+.pk-backfill-list {
+  margin-top: 10px;
+  border: 1px solid var(--arc-border);
+  border-radius: 6px;
+}
+
+.pk-backfill-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 50px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--arc-border);
+}
+
+.pk-backfill-row:last-child {
+  border-bottom: 0;
+}
+
+.pk-backfill-chapter-number {
+  color: var(--arc-text-hint);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.pk-backfill-row-main {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.pk-backfill-row-main strong,
+.pk-backfill-error {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pk-backfill-row-main strong {
+  color: var(--arc-text-primary);
+  font-size: 12px;
+}
+
+.pk-backfill-error {
+  color: var(--arc-danger, #d03050);
+  font-size: 11px;
+}
+
+@media (max-width: 680px) {
+  .pk-backfill-field,
+  .pk-backfill-field--number {
+    min-width: min(100%, 180px);
+    width: 100%;
+  }
 }
 
 .pk-history {

@@ -24,7 +24,7 @@ import { buildRepairPrompt } from '../prompts/repair'
 import { extractJsonObject } from '../tasks/base'
 import { runAgentTask } from '../agent'
 import { ensureWorkspaceDb } from '../../workspace-store'
-import { buildStoryStateContext, formatStoryStateForPrompt, applyStateDelta } from '../../story-state-store'
+import { buildStoryStateContext, formatStoryStateForPrompt, applyStateDelta, hasStateDeltaContent, normalizeStateDelta } from '../../story-state-store'
 import type { StateDelta } from '../../story-state-store'
 import { indexChapterSegments } from '../knowledge-retrieval'
 import { runLightCheck } from '../audit/light-check'
@@ -739,12 +739,9 @@ ${chapterContent}
   try {
     const generation = await aiGenerateTextWithUsage(settings, prompt, 1500, signal, { disableReasoning: true })
     const raw = generation.text
-    const parsed = extractJsonObject(raw) as unknown as StateDelta
-    if (!parsed.characters_updated) parsed.characters_updated = []
-    if (!parsed.relationships_delta) parsed.relationships_delta = []
-    if (!parsed.foreshadowing_delta) parsed.foreshadowing_delta = { planted: [], advanced: [], resolved: [] }
-    if (!parsed.timeline) parsed.timeline = { story_time_elapsed: '', current_story_date: '', events: [] }
-    return { delta: parsed, rawText: raw, usage: generation.usage }
+    const parsed = extractJsonObject(raw)
+    const delta = normalizeStateDelta(parsed)
+    return { delta: hasStateDeltaContent(delta) ? delta : null, rawText: raw, usage: generation.usage }
   } catch (error) {
     signal?.throwIfAborted()
     logError('STATE_DELTA_EXTRACT', settings, 'chapter-first-draft', error, 0)
