@@ -29,6 +29,23 @@ export type BackfillProgressPayload = {
   message?: string
 }
 
+export type BackfillTaskStatus = 'running' | 'pausing' | 'paused' | 'completed' | 'failed'
+
+export type BackfillTaskSnapshot = {
+  taskId: string
+  projectId: string
+  status: BackfillTaskStatus
+  current: number
+  total: number
+  chapterTitle: string
+  phase: 'starting' | BackfillProgressPayload['phase']
+  message?: string
+  startedAt: string
+  updatedAt: string
+  result?: BackfillResult
+  error?: string
+}
+
 /**
  * 状态补录的最终结果汇总。
  */
@@ -59,6 +76,7 @@ export type BackfillChapterRunPayload = {
 export type BackfillOptions = {
   onChapterRun?: (payload: BackfillChapterRunPayload) => void
   selection?: BackfillSelection
+  waitIfPaused?: (payload: Omit<BackfillProgressPayload, 'phase' | 'message'>) => Promise<void>
 }
 
 export async function getProjectBackfillChapterStatuses(projectId: string): Promise<BackfillChapterStatus[]> {
@@ -102,6 +120,12 @@ export async function backfillProjectStateFromChapters(
   for (let i = 0; i < chapters.length; i++) {
     const ch = chapters[i]
     const chapterTitle = ch.title || `第 ${i + 1} 章`
+    await options.waitIfPaused?.({
+      projectId,
+      current: i + 1,
+      total: chapters.length,
+      chapterTitle
+    })
     onProgress({ projectId, current: i + 1, total: chapters.length, chapterTitle, phase: 'extracting' })
     const startedAt = new Date().toISOString()
     beginBackfillChapter(db, {

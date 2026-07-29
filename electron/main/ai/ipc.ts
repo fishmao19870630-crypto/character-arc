@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { BrowserWindow, ipcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
 import type { AiTaskPayload, AppSettings, ChapterPostGenerationIssuesPayload, ChapterPostGenerationTaskPayload, ChapterStateWarningsPayload } from './shared-types'
 import { runAiTask, streamAiTask, testAiConnection, fetchModels, fetchImageModels, generateImage } from './runtime'
@@ -8,7 +8,9 @@ import { setChapterPostGenerationIssuesEmitter, setChapterPostGenerationTaskEmit
 import { retrieveKnowledgeContext } from './knowledge-retrieval'
 import { buildRunMeta } from './runtime/run-meta'
 import { backfillProjectStateFromChapters, getProjectBackfillChapterStatuses } from './state-backfill'
+import type { BackfillTaskSnapshot } from './state-backfill'
 import type { BackfillSelection } from './state-backfill'
+import { BackfillTaskPauseController } from './state-backfill-task-controller'
 import { buildStoryStateContext } from '../story-state-store'
 import { ensureWorkspaceDb } from '../workspace-store'
 import { runSpiralBootstrap } from './spiral'
@@ -44,7 +46,36 @@ const activeAiStreams = new Map<string, AbortController>()
  * 超时或用户手动取消时通过 `characterarc:ai-cancel` 通道 abort。
  */
 const activeAiTasks = new Map<string, AbortController>()
-const activeBackfillProjects = new Set<string>()
+type BackfillTaskRecord = {
+  controller: BackfillTaskPauseController
+  snapshot: BackfillTaskSnapshot
+}
+const backfillTasks = new Map<string, BackfillTaskRecord>()
+
+function isActiveBackfillTask(snapshot: BackfillTaskSnapshot): boolean {
+  return snapshot.status === 'running' || snapshot.status === 'pausing' || snapshot.status === 'paused'
+}
+
+function broadcastBackfillTask(snapshot: BackfillTaskSnapshot): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+      window.webContents.send('characterarc:ai-backfill-state-progress', snapshot)
+    }
+  }
+}
+
+function updateBackfillTask(
+  record: BackfillTaskRecord,
+  patch: Partial<BackfillTaskSnapshot>
+): BackfillTaskSnapshot {
+  record.snapshot = {
+    ...record.snapshot,
+    ...patch,
+    updatedAt: new Date().toISOString()
+  }
+  broadcastBackfillTask(record.snapshot)
+  return record.snapshot
+}
 
 /**
  * 注册所有 AI 相关的 IPC handler。
@@ -533,29 +564,106 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
     }
   })
 
-  ipcMain.handle('characterarc:ai-backfill-state', async (event, payload: unknown) => {
-    let activeProjectId = ''
+  ipcMain.handle('characterarc:ai-backfill-task-status', (_event, projectId: unknown) => {
+    try {
+      const normalizedProjectId = String(projectId ?? '').trim()
+      if (!normalizedProjectId) throw new Error('缺少 projectId。')
+      return { success: true, result: backfillTasks.get(normalizedProjectId)?.snapshot ?? null }
+    } catch (error) {
+      return { success: false, error: formatAiErrorMessage(error, '读取状态补录任务失败') }
+    }
+  })
+
+  ipcMain.handle('characterarc:ai-backfill-state-pause', (_event, projectId: unknown) => {
+    try {
+      const normalizedProjectId = String(projectId ?? '').trim()
+      const record = backfillTasks.get(normalizedProjectId)
+      if (!record || !isActiveBackfillTask(record.snapshot)) {
+        throw new Error('该项目没有正在进行的状态补录任务。')
+      }
+      const status = record.controller.requestPause()
+      return {
+        success: true,
+        result: updateBackfillTask(record, {
+          status,
+          message: status === 'paused' ? '任务已暂停。' : '将在当前章节处理完成后暂停。'
+        })
+      }
+    } catch (error) {
+      return { success: false, error: formatAiErrorMessage(error, '暂停状态补录失败') }
+    }
+  })
+
+  ipcMain.handle('characterarc:ai-backfill-state-resume', (_event, projectId: unknown) => {
+    try {
+      const normalizedProjectId = String(projectId ?? '').trim()
+      const record = backfillTasks.get(normalizedProjectId)
+      if (!record || !isActiveBackfillTask(record.snapshot)) {
+        throw new Error('该项目没有可继续的状态补录任务。')
+      }
+      const status = record.controller.resume()
+      return {
+        success: true,
+        result: updateBackfillTask(record, { status, message: '任务已继续。' })
+      }
+    } catch (error) {
+      return { success: false, error: formatAiErrorMessage(error, '继续状态补录失败') }
+    }
+  })
+
+  ipcMain.handle('characterarc:ai-backfill-state', (_event, payload: unknown) => {
     try {
       const request = payload as { settings?: AppSettings; projectId?: string; selection?: BackfillSelection }
       const projectId = String(request?.projectId ?? '').trim()
       if (!projectId) throw new Error('缺少 projectId。')
       if (!request?.settings) throw new Error('缺少 AI 设置。')
-      if (activeBackfillProjects.has(projectId)) {
-        throw new Error('该项目已有状态补录任务正在进行，请等待当前任务完成。')
+      const existing = backfillTasks.get(projectId)
+      if (existing && isActiveBackfillTask(existing.snapshot)) {
+        throw new Error('该项目已有状态补录任务正在进行。')
       }
-      activeBackfillProjects.add(projectId)
-      activeProjectId = projectId
 
-      const result = await backfillProjectStateFromChapters(
+      const now = new Date().toISOString()
+      const record: BackfillTaskRecord = {
+        controller: new BackfillTaskPauseController(),
+        snapshot: {
+          taskId: randomUUID(),
+          projectId,
+          status: 'running',
+          current: 0,
+          total: 0,
+          chapterTitle: '',
+          phase: 'starting',
+          message: '正在准备补录队列...',
+          startedAt: now,
+          updatedAt: now
+        }
+      }
+      backfillTasks.set(projectId, record)
+      broadcastBackfillTask(record.snapshot)
+
+      void backfillProjectStateFromChapters(
         request.settings,
         projectId,
         (progress) => {
-          if (!event.sender.isDestroyed()) {
-            event.sender.send('characterarc:ai-backfill-state-progress', progress)
-          }
+          updateBackfillTask(record, {
+            current: progress.current,
+            total: progress.total,
+            chapterTitle: progress.chapterTitle,
+            phase: progress.phase,
+            message: progress.message
+          })
         },
         {
           selection: request.selection,
+          waitIfPaused: async (progress) => {
+            await record.controller.waitIfPaused((status) => {
+              updateBackfillTask(record, {
+                ...progress,
+                status,
+                message: status === 'paused' ? '任务已暂停。' : '任务已继续。'
+              })
+            })
+          },
           onChapterRun: (run) => {
             const meta = buildRunMeta(
               'state-backfill',
@@ -576,11 +684,29 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
           }
         }
       )
-      return { success: true, result }
+        .then((result) => {
+          updateBackfillTask(record, {
+            status: 'completed',
+            phase: 'done',
+            current: result.totalChapters,
+            total: result.totalChapters,
+            chapterTitle: '',
+            message: result.failed > 0 ? '状态补录已完成，部分章节失败。' : '状态补录已完成。',
+            result,
+            error: undefined
+          })
+        })
+        .catch((error) => {
+          updateBackfillTask(record, {
+            status: 'failed',
+            message: formatAiErrorMessage(error, '状态补录失败'),
+            error: formatAiErrorMessage(error, '状态补录失败')
+          })
+        })
+
+      return { success: true, result: record.snapshot }
     } catch (error) {
       return { success: false, error: formatAiErrorMessage(error, '状态补录失败') }
-    } finally {
-      if (activeProjectId) activeBackfillProjects.delete(activeProjectId)
     }
   })
 }

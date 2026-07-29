@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { marked } from 'marked'
-import { Boxes, Clock, FileCheck2, GitBranch, History, MapPin, RefreshCw, ScrollText, Sparkles, Users } from 'lucide-vue-next'
+import { Boxes, Clock, FileCheck2, GitBranch, History, MapPin, Pause, Play, RefreshCw, ScrollText, Sparkles, Users } from 'lucide-vue-next'
 import {
   NAlert,
   NButton,
@@ -37,8 +37,15 @@ function renderMarkdown(content: string): string {
 type StoryState = NonNullable<Awaited<ReturnType<typeof window.characterArc.readStoryState>>['result']>
 
 const isRunningStoryAudit = ref(false)
-const isBackfillingState = ref(false)
+const isStartingBackfill = ref(false)
 const backfillProgress = ref<CharacterArcBackfillStateProgressPayload | null>(null)
+const isBackfillingState = computed(() => {
+  const status = backfillProgress.value?.status
+  return status === 'running' || status === 'pausing' || status === 'paused'
+})
+const isBackfillPaused = computed(() => backfillProgress.value?.status === 'paused')
+const isBackfillPausing = computed(() => backfillProgress.value?.status === 'pausing')
+const isBackfillControlsLocked = computed(() => isStartingBackfill.value || isBackfillingState.value)
 const backfillStatuses = ref<CharacterArcBackfillChapterStatus[]>([])
 const isLoadingBackfillStatuses = ref(false)
 const backfillMode = ref<'pending' | 'failed' | 'range'>('pending')
@@ -92,18 +99,23 @@ async function loadStoryState(): Promise<void> {
     storyState.value = null
     return
   }
+  const projectId = project.id
   isLoadingStoryState.value = true
   try {
-    const response = await window.characterArc.readStoryState(project.id)
+    const response = await window.characterArc.readStoryState(projectId)
+    if (appStore.currentProject?.id !== projectId) return
     if (!response.success || !response.result) {
       throw new Error(response.error ?? '读取世界状态失败')
     }
     storyState.value = response.result
   } catch (error) {
+    if (appStore.currentProject?.id !== projectId) return
     storyState.value = null
     message.error(error instanceof Error ? error.message : '读取世界状态失败')
   } finally {
-    isLoadingStoryState.value = false
+    if (appStore.currentProject?.id === projectId) {
+      isLoadingStoryState.value = false
+    }
   }
 }
 
@@ -113,27 +125,77 @@ async function loadBackfillStatuses(): Promise<void> {
     backfillStatuses.value = []
     return
   }
+  const projectId = project.id
   isLoadingBackfillStatuses.value = true
   try {
-    const response = await window.characterArc.readBackfillStateStatus(project.id)
+    const response = await window.characterArc.readBackfillStateStatus(projectId)
+    if (appStore.currentProject?.id !== projectId) return
     if (!response.success || !response.result) {
       throw new Error(response.error ?? '读取补录状态失败')
     }
     backfillStatuses.value = response.result
     rangeEnd.value = Math.max(rangeStart.value, response.result.length || 1)
   } catch (error) {
+    if (appStore.currentProject?.id !== projectId) return
     backfillStatuses.value = []
     message.error(error instanceof Error ? error.message : '读取补录状态失败')
   } finally {
-    isLoadingBackfillStatuses.value = false
+    if (appStore.currentProject?.id === projectId) {
+      isLoadingBackfillStatuses.value = false
+    }
   }
 }
+
+async function loadBackfillTaskStatus(): Promise<void> {
+  const projectId = appStore.currentProject?.id
+  if (!projectId) {
+    backfillProgress.value = null
+    return
+  }
+
+  const response = await window.characterArc.readBackfillTaskStatus(projectId)
+  if (appStore.currentProject?.id !== projectId) return
+  if (!response.success) {
+    message.error(response.error ?? '读取状态补录任务失败')
+    return
+  }
+  backfillProgress.value = response.result ?? null
+}
+
 const selectedAuditReport = ref<KnowledgeDocument | null>(null)
 const selectedKnowledgeDocument = ref<KnowledgeDocument | null>(null)
 const knowledgeHistoryRef = ref<HTMLElement | null>(null)
 
+const notifiedBackfillTaskIds = new Set<string>()
+
+function handleBackfillTaskFinished(payload: CharacterArcBackfillStateProgressPayload): void {
+  if (notifiedBackfillTaskIds.has(payload.taskId)) return
+  notifiedBackfillTaskIds.add(payload.taskId)
+  void loadStoryState()
+  void loadBackfillStatuses()
+
+  if (payload.status === 'failed') {
+    message.error(payload.error || '状态补录失败')
+    return
+  }
+
+  const result = payload.result
+  if (!result) return
+  if (result.failed > 0) {
+    const firstError = result.errors[0]
+    const detail = firstError ? `首个失败：${firstError.chapterTitle} - ${firstError.message}` : ''
+    message.error(`状态补录完成但有失败：${result.processedChapters} / ${result.totalChapters} 章成功，${result.skipped} 章跳过，${result.failed} 章失败。${detail}`, { duration: 8000 })
+    return
+  }
+  message.success(`状态补录完成：${result.processedChapters} / ${result.totalChapters} 章成功，${result.skipped} 章跳过。`)
+}
+
 const cleanupBackfillProgress = window.characterArc.onBackfillStateProgress((payload) => {
+  if (payload.projectId !== appStore.currentProject?.id) return
   backfillProgress.value = payload
+  if (payload.status === 'completed' || payload.status === 'failed') {
+    handleBackfillTaskFinished(payload)
+  }
 })
 
 onBeforeUnmount(() => {
@@ -143,13 +205,16 @@ onBeforeUnmount(() => {
 onMounted(() => {
   void loadStoryState()
   void loadBackfillStatuses()
+  void loadBackfillTaskStatus()
 })
 
 watch(
   () => appStore.currentProject?.id,
   () => {
+    backfillProgress.value = null
     void loadStoryState()
     void loadBackfillStatuses()
+    void loadBackfillTaskStatus()
   }
 )
 
@@ -190,8 +255,18 @@ const backfillStatusMeta: Record<CharacterArcBackfillChapterStatus['status'], {
   stale: { label: '正文已变化', type: 'warning' }
 }
 
-function resolveBackfillStatusMeta(status: unknown): (typeof backfillStatusMeta)[CharacterArcBackfillChapterStatus['status']] {
+function resolveBackfillStatusMeta(
+  status: unknown,
+  chapterTitle = ''
+): (typeof backfillStatusMeta)[CharacterArcBackfillChapterStatus['status']] {
   const normalized = String(status) as CharacterArcBackfillChapterStatus['status']
+  if (
+    normalized === 'running'
+    && isBackfillingState.value
+    && backfillProgress.value?.chapterTitle === chapterTitle
+  ) {
+    return { label: '处理中', type: 'warning' }
+  }
   return backfillStatusMeta[normalized] ?? backfillStatusMeta.unscanned
 }
 
@@ -230,11 +305,25 @@ const selectedBackfillChapterIds = computed(() => {
 })
 
 const backfillButtonLabel = computed(() => {
-  if (!isBackfillingState.value) return '从已有章节补录状态'
-  if (backfillProgress.value) {
-    return `补录中 ${backfillProgress.value.current}/${backfillProgress.value.total}`
+  return backfillProgress.value?.status === 'completed' ? '再次补录' : '从已有章节补录状态'
+})
+
+const backfillTaskStatusLabel = computed(() => {
+  switch (backfillProgress.value?.status) {
+    case 'pausing': return '等待暂停'
+    case 'paused': return '已暂停'
+    case 'running': return '后台运行中'
+    default: return ''
   }
-  return '补录中...'
+})
+
+const backfillProgressText = computed(() => {
+  const task = backfillProgress.value
+  if (!task) return ''
+  if (task.status === 'pausing') return task.message || '将在当前章节处理完成后暂停。'
+  if (task.status === 'paused') return task.chapterTitle ? `已暂停，下一章：${task.chapterTitle}` : '任务已暂停。'
+  if (task.phase === 'starting') return '正在准备补录队列...'
+  return task.chapterTitle ? `正在处理：${task.chapterTitle}` : task.message || '状态补录正在后台运行。'
 })
 
 async function runStoryDeepAudit(): Promise<void> {
@@ -307,7 +396,7 @@ function runStateBackfill(): void {
     message.warning('请先选择一个项目再执行状态补录。')
     return
   }
-  if (isBackfillingState.value) {
+  if (isStartingBackfill.value || isBackfillingState.value) {
     message.info('上一次状态补录还在进行中，请稍候。')
     return
   }
@@ -323,8 +412,8 @@ function runStateBackfill(): void {
     content: `将对 ${selectedCount} 个章节逐章提取状态变更，预计调用 AI ${selectedCount} 次。已完成且正文未变化的章节不会重复扫描。确认继续？`,
     positiveText: '开始补录',
     negativeText: '取消',
-    onPositiveClick: async () => {
-      isBackfillingState.value = true
+    onPositiveClick: () => {
+      isStartingBackfill.value = true
       backfillProgress.value = null
       void runStateBackfillTask(project.id)
     }
@@ -346,21 +435,40 @@ async function runStateBackfillTask(projectId: string): Promise<void> {
     if (!response.success || !response.result) {
       throw new Error(response.error ?? '状态补录失败')
     }
-    const { totalChapters, processedChapters, skipped, failed, errors } = response.result
-    if (failed > 0) {
-      const firstError = errors[0]
-      const detail = firstError ? `首个失败：${firstError.chapterTitle} - ${firstError.message}` : ''
-      message.error(`状态补录完成但有失败：${processedChapters} / ${totalChapters} 章成功，${skipped} 章跳过，${failed} 章失败。${detail}`, { duration: 8000 })
-      return
+    if (appStore.currentProject?.id === projectId) {
+      backfillProgress.value = response.result
+      message.success('状态补录已转入后台运行。')
     }
-    message.success(`状态补录完成：${processedChapters} / ${totalChapters} 章成功，${skipped} 章跳过。`)
   } catch (error) {
     message.error(error instanceof Error ? error.message : '状态补录失败')
   } finally {
-    isBackfillingState.value = false
-    backfillProgress.value = null
-    void loadStoryState()
-    void loadBackfillStatuses()
+    isStartingBackfill.value = false
+  }
+}
+
+async function pauseStateBackfill(): Promise<void> {
+  const projectId = appStore.currentProject?.id
+  if (!projectId || !isBackfillingState.value) return
+  const response = await window.characterArc.pauseBackfillProjectState(projectId)
+  if (!response.success || !response.result) {
+    message.error(response.error ?? '暂停状态补录失败')
+    return
+  }
+  if (appStore.currentProject?.id === projectId) {
+    backfillProgress.value = response.result
+  }
+}
+
+async function resumeStateBackfill(): Promise<void> {
+  const projectId = appStore.currentProject?.id
+  if (!projectId || !isBackfillPaused.value) return
+  const response = await window.characterArc.resumeBackfillProjectState(projectId)
+  if (!response.success || !response.result) {
+    message.error(response.error ?? '继续状态补录失败')
+    return
+  }
+  if (appStore.currentProject?.id === projectId) {
+    backfillProgress.value = response.result
   }
 }
 
@@ -475,19 +583,41 @@ watch(
           </div>
         </template>
         <template #header-extra>
-          <n-button
-            size="small"
-            :loading="isBackfillingState"
-            :disabled="!appStore.currentProject || isBackfillingState || isLoadingBackfillStatuses || !selectedBackfillChapterIds.length"
-            @click="runStateBackfill"
-          >
-            <template #icon><Sparkles :size="14" /></template>
-            {{ backfillButtonLabel }}
-          </n-button>
+          <n-space size="small">
+            <n-button
+              v-if="isBackfillingState && !isBackfillPaused"
+              size="small"
+              :loading="isBackfillPausing"
+              :disabled="isBackfillPausing"
+              @click="pauseStateBackfill"
+            >
+              <template #icon><Pause :size="14" /></template>
+              暂停
+            </n-button>
+            <n-button
+              v-else-if="isBackfillPaused"
+              size="small"
+              type="primary"
+              @click="resumeStateBackfill"
+            >
+              <template #icon><Play :size="14" /></template>
+              继续
+            </n-button>
+            <n-button
+              v-else
+              size="small"
+              :loading="isStartingBackfill"
+              :disabled="!appStore.currentProject || isLoadingBackfillStatuses || !selectedBackfillChapterIds.length"
+              @click="runStateBackfill"
+            >
+              <template #icon><Sparkles :size="14" /></template>
+              {{ backfillButtonLabel }}
+            </n-button>
+          </n-space>
         </template>
 
         <p class="pk-card-desc">
-          按章节补录角色状态、伏笔、关系等结构化数据；扫描结果会保留，正文未变化的已完成章节不会重复处理。
+          按章节补录角色状态、伏笔、关系等结构化数据；任务会在后台继续，扫描结果会保留。
         </p>
 
         <div class="pk-backfill-controls">
@@ -497,17 +627,17 @@ watch(
               v-model:value="backfillMode"
               size="small"
               :options="backfillModeOptions"
-              :disabled="isBackfillingState"
+              :disabled="isBackfillControlsLocked"
             />
           </label>
           <template v-if="backfillMode === 'range'">
             <label class="pk-backfill-field pk-backfill-field--number">
               <span>起始章节</span>
-              <n-input-number v-model:value="rangeStart" size="small" :min="1" :max="Math.max(1, backfillStatuses.length)" />
+              <n-input-number v-model:value="rangeStart" size="small" :min="1" :max="Math.max(1, backfillStatuses.length)" :disabled="isBackfillControlsLocked" />
             </label>
             <label class="pk-backfill-field pk-backfill-field--number">
               <span>结束章节</span>
-              <n-input-number v-model:value="rangeEnd" size="small" :min="1" :max="Math.max(1, backfillStatuses.length)" />
+              <n-input-number v-model:value="rangeEnd" size="small" :min="1" :max="Math.max(1, backfillStatuses.length)" :disabled="isBackfillControlsLocked" />
             </label>
           </template>
         </div>
@@ -518,15 +648,20 @@ watch(
           <n-tag size="small" :bordered="false" type="warning">待补录 {{ backfillStatusCounts.pending }}</n-tag>
           <n-tag v-if="backfillStatusCounts.failed" size="small" :bordered="false" type="error">失败/中断 {{ backfillStatusCounts.failed }}</n-tag>
           <n-tag size="small" :bordered="false" type="info">本次 {{ selectedBackfillChapterIds.length }}</n-tag>
-          <n-tag v-if="isBackfillingState && backfillProgress" size="small" type="warning" :bordered="false">
+          <n-tag v-if="isBackfillingState" size="small" type="warning" :bordered="false">
+            {{ backfillTaskStatusLabel }}
+          </n-tag>
+          <n-tag v-if="isBackfillingState && backfillProgress?.total" size="small" type="warning" :bordered="false">
             进度 {{ backfillProgress.current }} / {{ backfillProgress.total }}
           </n-tag>
         </div>
-        <n-alert v-if="isBackfillingState && backfillProgress?.chapterTitle" type="info" :show-icon="false" class="pk-card-progress">
-          正在处理：{{ backfillProgress.chapterTitle }}
-          <template v-if="backfillProgress.message">
-            <br>{{ backfillProgress.message }}
-          </template>
+        <n-alert
+          v-if="isBackfillingState && backfillProgress"
+          :type="isBackfillPaused || isBackfillPausing ? 'warning' : 'info'"
+          :show-icon="false"
+          class="pk-card-progress"
+        >
+          {{ backfillProgressText }}
         </n-alert>
         <n-spin :show="isLoadingBackfillStatuses">
           <n-virtual-list
@@ -544,8 +679,8 @@ watch(
                   <strong>{{ status.chapterTitle }}</strong>
                   <span v-if="status.error" class="pk-backfill-error" :title="status.error">{{ status.error }}</span>
                 </div>
-                <n-tag size="tiny" :bordered="false" :type="resolveBackfillStatusMeta(status.status).type">
-                  {{ resolveBackfillStatusMeta(status.status).label }}
+                <n-tag size="tiny" :bordered="false" :type="resolveBackfillStatusMeta(status.status, status.chapterTitle).type">
+                  {{ resolveBackfillStatusMeta(status.status, status.chapterTitle).label }}
                 </n-tag>
               </div>
             </template>

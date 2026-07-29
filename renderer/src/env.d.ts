@@ -197,12 +197,18 @@ declare global {
   }
 
   type CharacterArcBackfillStateProgressPayload = {
+    taskId: string
     projectId: string
+    status: 'running' | 'pausing' | 'paused' | 'completed' | 'failed'
     current: number
     total: number
     chapterTitle: string
-    phase: 'extracting' | 'applying' | 'skipped' | 'failed' | 'done'
+    phase: 'starting' | 'extracting' | 'applying' | 'skipped' | 'failed' | 'done'
     message?: string
+    startedAt: string
+    updatedAt: string
+    result?: CharacterArcBackfillStateResult
+    error?: string
   }
 
   type CharacterArcBackfillStateResult = {
@@ -319,12 +325,27 @@ declare global {
         }
       }) => Promise<{
         success: boolean
-        result?: CharacterArcBackfillStateResult
+        result?: CharacterArcBackfillStateProgressPayload
         error?: string
       }>
       readBackfillStateStatus: (projectId: string) => Promise<{
         success: boolean
         result?: CharacterArcBackfillChapterStatus[]
+        error?: string
+      }>
+      readBackfillTaskStatus: (projectId: string) => Promise<{
+        success: boolean
+        result?: CharacterArcBackfillStateProgressPayload | null
+        error?: string
+      }>
+      pauseBackfillProjectState: (projectId: string) => Promise<{
+        success: boolean
+        result?: CharacterArcBackfillStateProgressPayload
+        error?: string
+      }>
+      resumeBackfillProjectState: (projectId: string) => Promise<{
+        success: boolean
+        result?: CharacterArcBackfillStateProgressPayload
         error?: string
       }>
       onBackfillStateProgress: (callback: (payload: CharacterArcBackfillStateProgressPayload) => void) => () => void
