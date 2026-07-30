@@ -42,14 +42,16 @@ test('项目知识仅对所属项目可见，全局参考资料对所有项目�
   )
 })
 
-test('旧版空作用域项目知识归入默认项目，参考资料保持全局', () => {
-  const legacyProjectDocument = normalizeKnowledgeDocumentScope(makeDocument({ projectId: '' }), 'project-a')
+test('旧版空作用域项目知识保持未归属，新文档可显式使用当前项目兜底', () => {
+  const legacyProjectDocument = normalizeKnowledgeDocumentScope(makeDocument({ projectId: '' }))
+  const newProjectDocument = normalizeKnowledgeDocumentScope(makeDocument({ projectId: '' }), 'project-a')
   const referenceDocument = normalizeKnowledgeDocumentScope(
     makeDocument({ projectId: 'project-a', sourceType: 'reference-chunk' }),
     'project-a'
   )
 
-  assert.equal(legacyProjectDocument.projectId, 'project-a')
+  assert.equal(legacyProjectDocument.projectId, '')
+  assert.equal(newProjectDocument.projectId, 'project-a')
   assert.equal(referenceDocument.projectId, '')
 })
 

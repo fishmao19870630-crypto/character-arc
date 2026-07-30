@@ -25,6 +25,7 @@ import { formatKnowledgeDateTime, isProjectKnowledgeSource, resolveKnowledgeSour
 import { useAppStore } from '@/stores/app'
 import { toIpcPayload } from '@/utils/ipcPayload'
 import type { KnowledgeDocument } from '@/types/app'
+import { useIncrementalList } from '@/composables/useIncrementalList'
 
 const appStore = useAppStore()
 const dialog = useDialog()
@@ -53,6 +54,7 @@ const rangeStart = ref(1)
 const rangeEnd = ref(1)
 const storyState = ref<StoryState | null>(null)
 const isLoadingStoryState = ref(false)
+const projectRenderKey = computed(() => appStore.currentProject?.id ?? '')
 
 const characterNameMap = computed(
   () => new Map(appStore.characters.map((character) => [character.id, character.name]))
@@ -92,6 +94,19 @@ const hasStoryState = computed(() => {
   if (!sum) return false
   return Object.values(sum).some((v) => v > 0)
 })
+
+const storyCharacterStates = computed<StoryState['characterStates']>(() => storyState.value?.characterStates ?? [])
+const storyForeshadowing = computed<StoryState['activeForeshadowing']>(() => storyState.value?.activeForeshadowing ?? [])
+const storyRelationships = computed<StoryState['relationships']>(() => storyState.value?.relationships ?? [])
+const storyTimeline = computed<StoryState['recentTimeline']>(() => storyState.value?.recentTimeline ?? [])
+const storyWorldRules = computed<StoryState['worldRules']>(() => storyState.value?.worldRules ?? [])
+const storyClocks = computed<StoryState['activeClocks']>(() => storyState.value?.activeClocks ?? [])
+const visibleStoryCharacterStates = useIncrementalList(storyCharacterStates, projectRenderKey, { initialSize: 24, batchSize: 24 })
+const visibleStoryForeshadowing = useIncrementalList(storyForeshadowing, projectRenderKey, { initialSize: 24, batchSize: 24 })
+const visibleStoryRelationships = useIncrementalList(storyRelationships, projectRenderKey, { initialSize: 24, batchSize: 24 })
+const visibleStoryTimeline = useIncrementalList(storyTimeline, projectRenderKey, { initialSize: 24, batchSize: 24 })
+const visibleStoryWorldRules = useIncrementalList(storyWorldRules, projectRenderKey, { initialSize: 24, batchSize: 24 })
+const visibleStoryClocks = useIncrementalList(storyClocks, projectRenderKey, { initialSize: 24, batchSize: 24 })
 
 async function loadStoryState(): Promise<void> {
   const project = appStore.currentProject
@@ -231,6 +246,8 @@ const assistantKnowledgeDocuments = computed(() =>
     .filter((doc) => isProjectKnowledgeSource(doc.sourceType) && !(doc.sourceType === 'canon-fact' && doc.sourceLabel === 'story-deep-audit'))
     .sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''))
 )
+const visibleAuditReports = useIncrementalList(auditReports, projectRenderKey, { initialSize: 24, batchSize: 24 })
+const visibleKnowledgeDocuments = useIncrementalList(assistantKnowledgeDocuments, projectRenderKey, { initialSize: 24, batchSize: 24 })
 
 const chapterCount = computed(() => appStore.chapters.length)
 const validChapterCount = computed(
@@ -725,7 +742,7 @@ watch(
               <div class="pk-state-head"><Users :size="14" /><span>角色状态</span><n-tag size="tiny" :bordered="false">{{ storyState.characterStates.length }}</n-tag></div>
             </template>
             <div class="pk-state-list">
-              <div v-for="cs in storyState.characterStates" :key="cs.characterId" class="pk-state-item">
+              <div v-for="cs in visibleStoryCharacterStates" :key="cs.characterId" class="pk-state-item">
                 <div class="pk-state-item-title">
                   <strong>{{ resolveCharacterName(cs.characterId) }}</strong>
                   <n-tag size="tiny" :bordered="false" type="info">{{ formatChapterRef(cs.chapterIndex) }}</n-tag>
@@ -751,7 +768,7 @@ watch(
               <div class="pk-state-head"><ScrollText :size="14" /><span>伏笔</span><n-tag size="tiny" :bordered="false">{{ storyState.activeForeshadowing.length }}</n-tag></div>
             </template>
             <div class="pk-state-list">
-              <div v-for="fs in storyState.activeForeshadowing" :key="fs.foreshadowingId" class="pk-state-item">
+              <div v-for="fs in visibleStoryForeshadowing" :key="fs.foreshadowingId" class="pk-state-item">
                 <div class="pk-state-item-title">
                   <strong>{{ fs.description }}</strong>
                   <n-tag size="tiny" :bordered="false" :type="(foreshadowingStatusMeta[fs.status] ?? foreshadowingStatusMeta.active).type">
@@ -779,7 +796,7 @@ watch(
               <div class="pk-state-head"><GitBranch :size="14" /><span>角色关系</span><n-tag size="tiny" :bordered="false">{{ storyState.relationships.length }}</n-tag></div>
             </template>
             <div class="pk-state-list">
-              <div v-for="rel in storyState.relationships" :key="rel.relationshipId" class="pk-state-item">
+              <div v-for="rel in visibleStoryRelationships" :key="rel.relationshipId" class="pk-state-item">
                 <div class="pk-state-item-title">
                   <strong>{{ resolveCharacterName(rel.participantA) }} ⇄ {{ resolveCharacterName(rel.participantB) }}</strong>
                   <n-tag size="tiny" :bordered="false" type="info">{{ rel.currentStatus }}</n-tag>
@@ -800,7 +817,7 @@ watch(
               <div class="pk-state-head"><Clock :size="14" /><span>时间线</span><n-tag size="tiny" :bordered="false">{{ storyState.recentTimeline.length }}</n-tag></div>
             </template>
             <div class="pk-state-list">
-              <div v-for="(tl, idx) in storyState.recentTimeline" :key="`tl-${idx}`" class="pk-state-item">
+              <div v-for="(tl, idx) in visibleStoryTimeline" :key="`tl-${idx}`" class="pk-state-item">
                 <div class="pk-state-item-title">
                   <strong>{{ formatChapterRef(tl.chapterIndex) }}</strong>
                   <n-tag v-if="tl.storyDate" size="tiny" :bordered="false" type="info">{{ tl.storyDate }}</n-tag>
@@ -820,7 +837,7 @@ watch(
               <div class="pk-state-head"><ScrollText :size="14" /><span>世界规则</span><n-tag size="tiny" :bordered="false">{{ storyState.worldRules.length }}</n-tag></div>
             </template>
             <div class="pk-state-list">
-              <div v-for="wr in storyState.worldRules" :key="wr.ruleId" class="pk-state-item">
+              <div v-for="wr in visibleStoryWorldRules" :key="wr.ruleId" class="pk-state-item">
                 <div class="pk-state-item-title">
                   <strong>{{ wr.ruleContent }}</strong>
                   <n-tag v-if="wr.mustComply" size="tiny" :bordered="false" type="error">强约束</n-tag>
@@ -840,7 +857,7 @@ watch(
               <div class="pk-state-head"><Clock :size="14" /><span>倒计时</span><n-tag size="tiny" :bordered="false">{{ storyState.activeClocks.length }}</n-tag></div>
             </template>
             <div class="pk-state-list">
-              <div v-for="ck in storyState.activeClocks" :key="ck.clockId" class="pk-state-item">
+              <div v-for="ck in visibleStoryClocks" :key="ck.clockId" class="pk-state-item">
                 <div class="pk-state-item-title">
                   <strong>{{ ck.eventDescription }}</strong>
                   <n-tag size="tiny" :bordered="false" type="warning">{{ ck.urgency || ck.status }}</n-tag>
@@ -867,7 +884,7 @@ watch(
       <n-empty v-if="!auditReports.length" description="还没有执行过一致性审计。" />
       <n-space v-else vertical size="small">
         <n-card
-          v-for="report in auditReports"
+          v-for="report in visibleAuditReports"
           :key="report.id"
           size="small"
           hoverable
@@ -902,7 +919,7 @@ watch(
       <n-empty v-if="!assistantKnowledgeDocuments.length" description="全局助理保存的知识文档会出现在这里。" />
       <n-space v-else vertical size="small">
         <n-card
-          v-for="document in assistantKnowledgeDocuments"
+          v-for="document in visibleKnowledgeDocuments"
           :key="document.id"
           size="small"
           hoverable

@@ -402,28 +402,26 @@ watch(searchKeyword, (value) => {
       <div class="workspace-body" :class="{ 'workspace-body--flush': isGlobalAssistantPanel }">
         <div class="workspace-body-shell">
           <div class="workspace-body-main arc-scrollbar" :class="{ 'workspace-body-main--flush': isGlobalAssistantPanel }">
-            <Transition name="panel-switch" mode="out-in">
-              <!-- 搜索模式下显示全局搜索结果面板 -->
-              <SearchResultsPanel
-                v-if="isSearchMode"
-                key="search-results"
-                :query="normalizedSearch"
-                @open-result="openSearchResult"
-              />
-              <!-- 非搜索模式下根据当前激活的面板渲染对应组件 -->
-              <NovelWorkflowPanel v-else-if="appStore.activePanel === 'workflow'" key="workflow" />
-              <OverviewPanel v-else-if="appStore.activePanel === 'overview'" key="overview" :search-query="normalizedSearch" />
-              <ProjectKnowledgePanel v-else-if="appStore.activePanel === 'project-knowledge'" key="project-knowledge" />
-              <WorldviewPanel v-else-if="appStore.activePanel === 'world'" key="world" :search-query="normalizedSearch" />
-              <CharactersPanel v-else-if="appStore.activePanel === 'characters'" key="characters" :search-query="normalizedSearch" />
-              <RelationsPanel v-else-if="appStore.activePanel === 'relations'" key="relations" :search-query="normalizedSearch" />
-              <InspirationPanel v-else-if="appStore.activePanel === 'inspiration'" key="inspiration" :search-query="normalizedSearch" />
-              <OutlinePanel v-else-if="appStore.activePanel === 'outline'" key="outline" :search-query="normalizedSearch" />
-              <PlotThreadsPanel v-else-if="appStore.activePanel === 'threads'" key="threads" :search-query="normalizedSearch" />
-              <GlobalAssistantPage v-else-if="appStore.activePanel === 'global-assistant'" key="global-assistant" />
-              <GlobalAssistantV2Page v-else-if="appStore.activePanel === 'global-assistant-v2'" key="global-assistant-v2" />
-              <SettingsPanel v-else key="settings" />
-            </Transition>
+            <!-- 搜索模式下显示全局搜索结果面板 -->
+            <SearchResultsPanel
+              v-if="isSearchMode"
+              key="search-results"
+              :query="normalizedSearch"
+              @open-result="openSearchResult"
+            />
+            <!-- 非搜索模式下根据当前激活的面板渲染对应组件 -->
+            <NovelWorkflowPanel v-else-if="appStore.activePanel === 'workflow'" key="workflow" />
+            <OverviewPanel v-else-if="appStore.activePanel === 'overview'" key="overview" :search-query="normalizedSearch" />
+            <ProjectKnowledgePanel v-else-if="appStore.activePanel === 'project-knowledge'" key="project-knowledge" />
+            <WorldviewPanel v-else-if="appStore.activePanel === 'world'" key="world" :search-query="normalizedSearch" />
+            <CharactersPanel v-else-if="appStore.activePanel === 'characters'" key="characters" :search-query="normalizedSearch" />
+            <RelationsPanel v-else-if="appStore.activePanel === 'relations'" key="relations" :search-query="normalizedSearch" />
+            <InspirationPanel v-else-if="appStore.activePanel === 'inspiration'" key="inspiration" :search-query="normalizedSearch" />
+            <OutlinePanel v-else-if="appStore.activePanel === 'outline'" key="outline" :search-query="normalizedSearch" />
+            <PlotThreadsPanel v-else-if="appStore.activePanel === 'threads'" key="threads" :search-query="normalizedSearch" />
+            <GlobalAssistantPage v-else-if="appStore.activePanel === 'global-assistant'" key="global-assistant" />
+            <GlobalAssistantV2Page v-else-if="appStore.activePanel === 'global-assistant-v2'" key="global-assistant-v2" />
+            <SettingsPanel v-else key="settings" />
           </div>
 
           <Transition name="assistant-backdrop">
@@ -917,26 +915,6 @@ watch(searchKeyword, (value) => {
   height: 100%;
   opacity: 1;
   background: var(--arc-primary);
-}
-
-/* panel-switch transition */
-.panel-switch-enter-active {
-  transition:
-    opacity 0.14s cubic-bezier(0, 0, 0.2, 1),
-    transform 0.14s cubic-bezier(0, 0, 0.2, 1);
-}
-
-.panel-switch-leave-active {
-  transition: opacity 0.08s cubic-bezier(0.4, 0, 1, 1);
-}
-
-.panel-switch-enter-from {
-  opacity: 0;
-  transform: translateY(3px);
-}
-
-.panel-switch-leave-to {
-  opacity: 0;
 }
 
 .assistant-dock-enter-active,

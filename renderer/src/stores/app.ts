@@ -124,6 +124,7 @@ interface ProjectWorkspacePayload {
   outlineItems?: OutlineItem[]
   chapters?: ChapterDraft[]
   chapterVersions?: ChapterVersion[]
+  plotThreads?: PlotThread[]
   messages?: ChatMessage[]
 }
 
@@ -293,7 +294,7 @@ export const useAppStore = defineStore('app', () => {
   /** 持久化全部知识文档；项目知识按 projectId 隔离，参考资料保持全局。 */
   const allKnowledgeDocuments = ref<KnowledgeDocument[]>(
     (stored.knowledgeDocuments ?? []).map((document) =>
-      normalizeKnowledgeDocumentScope(document, selectedProjectId.value || projects.value[0]?.id || '')
+      normalizeKnowledgeDocumentScope(document)
     )
   )
   /** 当前项目可见的知识文档，以及所有项目共享的参考资料。 */
@@ -608,7 +609,7 @@ export const useAppStore = defineStore('app', () => {
     coverWorkbenchHistory.value = Array.isArray(payload.coverWorkbenchHistory) ? payload.coverWorkbenchHistory : []
     allKnowledgeDocuments.value = Array.isArray((payload as Partial<StoredState>).knowledgeDocuments)
       ? (payload as Partial<StoredState>).knowledgeDocuments!.map((document) =>
-          normalizeKnowledgeDocumentScope(document, selectedProjectId.value || fallbackProjectId)
+          normalizeKnowledgeDocumentScope(document)
         )
       : []
     referenceWorks.value = Array.isArray((payload as Partial<StoredState>).referenceWorks)
@@ -1043,7 +1044,7 @@ export const useAppStore = defineStore('app', () => {
 
   // ── 项目 CRUD ──
   /** 从向导创建完整项目工作区：分配 ID、设置默认分卷和章节、切换到工作台 */
-  function createProjectWorkspace(payload: ProjectWorkspacePayload): void {
+  function createProjectWorkspace(payload: ProjectWorkspacePayload): string {
     const projectId = uniqueId('project')
     const nextVolumes = payload.outlineVolumes?.length ? payload.outlineVolumes : [createWorkspaceVolume()]
     const nextChapters = payload.chapters?.length ? payload.chapters : [buildStarterChapter(nextVolumes[0].id)]
@@ -1081,6 +1082,7 @@ export const useAppStore = defineStore('app', () => {
         outlineItems: payload.outlineItems,
         chapters: nextChapters,
         chapterVersions: payload.chapterVersions,
+        plotThreads: payload.plotThreads,
         messages: payload.messages
       })
     }
@@ -1093,6 +1095,7 @@ export const useAppStore = defineStore('app', () => {
         : 'chapters'
     syncSelectedChapter(projectId)
     schedulePersist('fast')
+    return projectId
   }
 
   /** 快速创建项目（仅标题/题材/长短篇/字数展示），自动生成默认分卷和首章 */

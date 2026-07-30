@@ -5,6 +5,7 @@ import { NButton, NDivider, NDynamicTags, NDropdown, NEmpty, NForm, NFormItem, N
 import { useAppStore } from '@/stores/app'
 import type { DropdownOption } from 'naive-ui'
 import type { PlotThread } from '@/types/app'
+import { useIncrementalList } from '@/composables/useIncrementalList'
 
 const props = defineProps<{
   searchQuery?: string
@@ -37,6 +38,9 @@ const filteredThreads = computed(() => {
 
 const openThreads = computed(() => filteredThreads.value.filter((t) => t.status === 'open'))
 const resolvedThreads = computed(() => filteredThreads.value.filter((t) => t.status === 'resolved'))
+const threadResetKey = computed(() => props.searchQuery?.trim().toLowerCase() ?? '')
+const visibleOpenThreads = useIncrementalList(openThreads, threadResetKey, { initialSize: 30, batchSize: 30 })
+const visibleResolvedThreads = useIncrementalList(resolvedThreads, threadResetKey, { initialSize: 30, batchSize: 30 })
 const isEditing = computed(() => Boolean(editingThreadId.value))
 
 // 章节选项，用于关联哪章埋下/哪章收束
@@ -154,7 +158,7 @@ function formatTime(value: string): string {
     <div v-if="openThreads.length > 0" class="thread-group">
       <div class="group-label"><Circle :size="13" class="group-icon open-icon" /> 活跃伏笔</div>
       <div
-        v-for="thread in openThreads"
+        v-for="thread in visibleOpenThreads"
         :key="thread.id"
         class="thread-card"
       >
@@ -190,7 +194,7 @@ function formatTime(value: string): string {
       <n-divider class="group-divider" />
       <div class="group-label"><CheckCircle :size="13" class="group-icon resolved-icon" /> 已收尾</div>
       <div
-        v-for="thread in resolvedThreads"
+        v-for="thread in visibleResolvedThreads"
         :key="thread.id"
         class="thread-card resolved-card"
       >

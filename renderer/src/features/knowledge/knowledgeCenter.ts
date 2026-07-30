@@ -326,10 +326,10 @@ export function isProjectKnowledgeSource(sourceType: KnowledgeDocumentSourceType
   return PROJECT_SOURCE_TYPES.has(sourceType)
 }
 
-/** 旧版项目知识没有 projectId；首次载入时归入当前（或默认）项目。参考资料始终保持全局。 */
+/** 项目知识仅在调用方明确提供兜底项目时补齐归属；历史空归属保持隔离。 */
 export function normalizeKnowledgeDocumentScope(
   document: KnowledgeDocument,
-  fallbackProjectId: string
+  fallbackProjectId = ''
 ): KnowledgeDocument {
   return {
     ...document,

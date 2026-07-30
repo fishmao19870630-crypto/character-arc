@@ -13,6 +13,7 @@ import type { DropdownOption, SelectOption } from 'naive-ui'
 import type { OutlineImportNewVolume, OutlineImportPlanEntry, OutlineImportVolumeUpdate, OutlineItem, OutlineItemStatus, OutlineVolume } from '@/types/app'
 import AiEnhancePreview from './AiEnhancePreview.vue'
 import type { EnhanceFieldDiff } from './AiEnhancePreview.vue'
+import { useIncrementalList } from '@/composables/useIncrementalList'
 
 const props = defineProps<{
   searchQuery?: string // 全局搜索关键词
@@ -321,6 +322,29 @@ const filteredOutlineGroups = computed(() => {
       )
     }))
     .filter((group) => group.items.length > 0)
+})
+const filteredOutlineItems = computed(() => filteredOutlineGroups.value.flatMap((group) => group.items))
+const visibleOutlineItems = useIncrementalList(
+  filteredOutlineItems,
+  computed(() => props.searchQuery?.trim().toLowerCase() ?? '')
+)
+const visibleOutlineGroups = computed(() => {
+  let remaining = visibleOutlineItems.value.length
+  const groups: typeof filteredOutlineGroups.value = []
+
+  for (const group of filteredOutlineGroups.value) {
+    if (group.items.length === 0) {
+      groups.push(group)
+      continue
+    }
+    if (remaining <= 0) break
+
+    const items = group.items.slice(0, remaining)
+    groups.push({ ...group, items })
+    remaining -= items.length
+  }
+
+  return groups
 })
 // 可见大纲节点的总数（用于顶部摘要显示）
 const totalVisibleItems = computed(() => filteredOutlineGroups.value.reduce((count, group) => count + group.items.length, 0))
@@ -1705,7 +1729,7 @@ watch(
 
     <!-- 时间线主体 -->
     <div v-if="filteredOutlineGroups.length" class="timeline">
-      <template v-for="group in filteredOutlineGroups" :key="group.volume.id">
+      <template v-for="group in visibleOutlineGroups" :key="group.volume.id">
         <!-- 分卷标记 -->
         <div
           class="timeline-volume-marker"

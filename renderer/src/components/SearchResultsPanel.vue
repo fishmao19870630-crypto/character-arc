@@ -5,6 +5,7 @@ import { getChapterCharacterCount, getChapterPreviewText, getPlainTextFromEditor
 import { resolveKnowledgeSourceTypeLabel } from '@/features/knowledge/knowledgeCenter'
 import { useAppStore } from '@/stores/app'
 import type { PanelName } from '@/types/app'
+import { useIncrementalList } from '@/composables/useIncrementalList'
 
 const props = defineProps<{
   query: string // 搜索关键词
@@ -42,6 +43,9 @@ const resultGroups = computed<ResultGroup[]>(() => {
   if (!query) {
     return []
   }
+
+  const characterNameById = new Map(appStore.characters.map((character) => [character.id, character.name]))
+  const organizationNameById = new Map(appStore.organizations.map((organization) => [organization.id, organization.name]))
 
   const worldviewItems = appStore.worldviewEntries
     .filter((entry) => `${entry.type} ${entry.title} ${entry.content}`.toLowerCase().includes(query))
@@ -93,40 +97,28 @@ const resultGroups = computed<ResultGroup[]>(() => {
       })),
     ...appStore.characterRelationships
       .filter((relationship) => {
-        const fromCharacter = appStore.characters.find((character) => character.id === relationship.fromCharacterId)
-        const toCharacter = appStore.characters.find((character) => character.id === relationship.toCharacterId)
-
-        return `${relationship.type} ${relationship.description} ${fromCharacter?.name ?? ''} ${toCharacter?.name ?? ''}`
+        return `${relationship.type} ${relationship.description} ${characterNameById.get(relationship.fromCharacterId) ?? ''} ${characterNameById.get(relationship.toCharacterId) ?? ''}`
           .toLowerCase()
           .includes(query)
       })
       .map((relationship) => {
-        const fromCharacter = appStore.characters.find((character) => character.id === relationship.fromCharacterId)
-        const toCharacter = appStore.characters.find((character) => character.id === relationship.toCharacterId)
-
         return {
           id: `relationship-${relationship.id}`,
-          title: `${fromCharacter?.name ?? '未绑定角色'} - ${toCharacter?.name ?? '未绑定角色'}`,
+          title: `${characterNameById.get(relationship.fromCharacterId) ?? '未绑定角色'} - ${characterNameById.get(relationship.toCharacterId) ?? '未绑定角色'}`,
           summary: relationship.description,
           meta: `关系 · ${relationship.type}`
         }
       }),
     ...appStore.organizationMemberships
       .filter((membership) => {
-        const character = appStore.characters.find((item) => item.id === membership.characterId)
-        const organization = appStore.organizations.find((item) => item.id === membership.organizationId)
-
-        return `${membership.role} ${membership.notes} ${character?.name ?? ''} ${organization?.name ?? ''}`
+        return `${membership.role} ${membership.notes} ${characterNameById.get(membership.characterId) ?? ''} ${organizationNameById.get(membership.organizationId) ?? ''}`
           .toLowerCase()
           .includes(query)
       })
       .map((membership) => {
-        const character = appStore.characters.find((item) => item.id === membership.characterId)
-        const organization = appStore.organizations.find((item) => item.id === membership.organizationId)
-
         return {
           id: `membership-${membership.id}`,
-          title: `${character?.name ?? '未绑定角色'} · ${organization?.name ?? '未绑定组织'}`,
+          title: `${characterNameById.get(membership.characterId) ?? '未绑定角色'} · ${organizationNameById.get(membership.organizationId) ?? '未绑定组织'}`,
           summary: membership.notes || '待补充成员归属说明',
           meta: `归属 · ${membership.role}`
         }
@@ -227,6 +219,19 @@ const resultGroups = computed<ResultGroup[]>(() => {
 
 // 搜索结果总数
 const totalCount = computed(() => resultGroups.value.reduce((count, group) => count + group.items.length, 0))
+const flattenedResults = computed(() => resultGroups.value.flatMap((group) => group.items))
+const visibleResults = useIncrementalList(flattenedResults, normalizedQuery)
+const visibleResultGroups = computed(() => {
+  let remaining = visibleResults.value.length
+
+  return resultGroups.value
+    .map((group) => {
+      const visibleItems = group.items.slice(0, remaining)
+      remaining -= visibleItems.length
+      return { ...group, visibleItems }
+    })
+    .filter((group) => group.visibleItems.length > 0)
+})
 
 // 点击搜索结果卡片后，通知父组件导航到对应面板（如为章节则同时传递章节 ID）
 function openGroupResult(group: ResultGroup, item: ResultGroup['items'][number]): void {
@@ -256,7 +261,7 @@ function openGroupResult(group: ResultGroup, item: ResultGroup['items'][number])
 
     <div v-if="resultGroups.length > 0" class="result-groups">
       <section
-        v-for="group in resultGroups"
+        v-for="group in visibleResultGroups"
         :key="group.id"
         class="result-group"
       >
@@ -274,7 +279,7 @@ function openGroupResult(group: ResultGroup, item: ResultGroup['items'][number])
 
         <div class="group-grid">
           <button
-            v-for="item in group.items"
+            v-for="item in group.visibleItems"
             :key="item.id"
             class="result-card"
             @click="openGroupResult(group, item)"

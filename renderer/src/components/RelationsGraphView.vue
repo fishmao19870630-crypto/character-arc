@@ -44,6 +44,7 @@ const nodeLabelPositions = ref<Array<{ id: string; label: string; left: number; 
 let cy: cytoscape.Core | null = null
 let lastTappedNodeId: string | null = null
 let lastTappedAt = 0
+let renderFrameId: number | null = null
 
 const filteredGraph = computed(() =>
   filterRelationsGraph(props.graph, {
@@ -206,19 +207,14 @@ watch(selectedOrganizationId, () => {
 
 watch(
   [() => displayGraph.value.nodes, () => displayGraph.value.edges],
-  async () => {
-    await nextTick()
-    renderGraph()
-  },
-  { deep: true }
+  scheduleGraphRender
 )
 
 watch(
   [selectedNodeId, focusMode, selectedOrganizationId],
   () => {
     refreshGraphFocus()
-  },
-  { deep: true }
+  }
 )
 
 watch(isDarkMode, () => {
@@ -229,15 +225,29 @@ watch(isDarkMode, () => {
 
 onMounted(async () => {
   await nextTick()
-  renderGraph()
+  scheduleGraphRender()
 })
 
 onBeforeUnmount(() => {
+  if (renderFrameId !== null) {
+    window.cancelAnimationFrame(renderFrameId)
+    renderFrameId = null
+  }
   if (cy) {
     cy.destroy()
     cy = null
   }
 })
+
+function scheduleGraphRender(): void {
+  if (renderFrameId !== null) {
+    window.cancelAnimationFrame(renderFrameId)
+  }
+  renderFrameId = window.requestAnimationFrame(() => {
+    renderFrameId = null
+    renderGraph()
+  })
+}
 
 function toggleHighIntensityOnly(): void {
   highIntensityOnly.value = !highIntensityOnly.value

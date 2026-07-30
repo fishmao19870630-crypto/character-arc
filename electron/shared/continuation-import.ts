@@ -27,7 +27,7 @@ export type ContinuationNovelFilePreview = ContinuationImportDocument & {
 
 const CHINESE_NUMBER = '零〇一二三四五六七八九十百千万两'
 const CHAPTER_HEADING_RE = new RegExp(
-  `^(?:第\\s*[0-9${CHINESE_NUMBER}]+\\s*[章节回]|chapter\\s*[0-9]+|序章|楔子|引子|前言|后记|尾声|终章|大结局|番外(?:\\s*[0-9${CHINESE_NUMBER}]+)?)(?:[：:、.．\\-—\\s]+.{0,48})?$`,
+  `^(?:第\\s*[0-9${CHINESE_NUMBER}]+\\s*[章节回]|chapter\\s*[0-9]+|序章|楔子|引子|前言|后记|尾声|终章|大结局|番外(?:\\s*[0-9${CHINESE_NUMBER}]+)?)(?:[：:、.．\\-—\\s]*[^。！？!?；;]{0,48})?$`,
   'iu'
 )
 const VOLUME_HEADING_RE = new RegExp(

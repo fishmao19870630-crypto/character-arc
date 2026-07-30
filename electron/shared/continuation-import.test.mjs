@@ -56,3 +56,11 @@ test('下一章编号忽略前言并支持中文章节数字', () => {
     { title: '第一百章 重逢' }
   ]), '第101章：续写')
 })
+
+test('识别章节编号后没有空格或标点的常见标题', () => {
+  const parsed = parseContinuationNovelText(`第1章初遇\n正文一。\n第二章风波再起\n正文二。`, '紧凑标题')
+
+  assert.equal(parsed.chapterCount, 2)
+  assert.equal(parsed.chapters[0].title, '第1章初遇')
+  assert.equal(parsed.chapters[1].title, '第二章风波再起')
+})
