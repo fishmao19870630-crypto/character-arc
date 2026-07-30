@@ -19,6 +19,21 @@ const outlineItemSchema = z.object({
 })
 
 const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
+  'market-analysis': z.object({
+    summary: stringField,
+    patterns: z.array(z.object({
+      label: stringField,
+      evidence: stringField,
+      writingTechnique: stringField
+    })),
+    originalConcepts: z.array(z.object({
+      title: stringField,
+      premise: stringField,
+      differentiation: stringField,
+      targetAudience: stringField,
+      outline: stringList
+    }))
+  }),
   'assistant-intent': z.object({
     intent: z.enum(['chat', 'proposal']),
     reason: stringField

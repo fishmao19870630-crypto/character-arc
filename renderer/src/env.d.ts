@@ -645,6 +645,44 @@ declare global {
         mirror?: string
         error?: string
       }>
+      fetchMarketRanking: (platform: string, rankingType: string, force?: boolean, requestId?: string) => Promise<{
+        success: boolean
+        result?: {
+          platform: 'qidian' | 'qimao' | 'jjwxc' | 'ciweimao'
+          platformLabel: string
+          rankingType: string
+          rankingLabel: string
+          sourceUrl: string
+          fetchedAt: number
+          fromCache: boolean
+          warning?: string
+          books: Array<{
+            id: string
+            rank: number
+            title: string
+            author: string
+            category: string
+            subcategory: string
+            wordCount: string
+            metric: string
+            description: string
+            url: string
+            status?: string
+          }>
+        }
+        error?: string
+      }>
+      onMarketRankingProgress: (callback: (payload: {
+        requestId: string
+        platform: 'qidian' | 'qimao' | 'jjwxc' | 'ciweimao'
+        phase: 'browser' | 'collecting' | 'processing' | 'done' | 'error'
+        percent: number
+        message: string
+      }) => void) => () => void
+      openMarketPlatformLogin: (platform: 'qimao' | 'jjwxc' | 'ciweimao') => Promise<{
+        success: boolean
+        error?: string
+      }>
 
       /** Assistant Runtime v2 IPC 通道。参数与返回值见 @shared/assistant-runtime。 */
       assistant: {

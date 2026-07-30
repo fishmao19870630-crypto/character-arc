@@ -204,7 +204,7 @@ export const useAppStore = defineStore('app', () => {
   /** 是否已完成初始化水合（从 SQLite 加载数据） */
   const hasHydrated = ref(false)
   /** 当前视图：项目列表 / 新建向导 / 工作台 / 章节写作 / 独立能力页 */
-  const currentView = ref<'projects' | 'wizard' | 'continuation-import' | 'workbench' | 'chapter-studio' | 'deconstruction-library' | 'skills' | 'cover-workbench' | 'fanqie-trends'>('projects')
+  const currentView = ref<'projects' | 'wizard' | 'continuation-import' | 'workbench' | 'chapter-studio' | 'deconstruction-library' | 'skills' | 'cover-workbench' | 'fanqie-trends' | 'market-radar'>('projects')
   /** 工作台中当前激活的面板 */
   const activePanel = ref<PanelName>('outline')
   /** 上一次在工作台中查看的面板（非 chapters），用于从章节写作返回时恢复 */
@@ -983,6 +983,12 @@ export const useAppStore = defineStore('app', () => {
   function openFanqieTrends(): void {
     pendingChapterInsertion.value = null
     currentView.value = 'fanqie-trends'
+  }
+
+  /** 打开多平台榜单与 AI 选题分析。 */
+  function openMarketRadar(): void {
+    pendingChapterInsertion.value = null
+    currentView.value = 'market-radar'
   }
 
   /** 打开 Skills 独立页面 */
@@ -3352,6 +3358,7 @@ export const useAppStore = defineStore('app', () => {
     openChapterStudio,
     openDeconstructionLibrary,
     openFanqieTrends,
+    openMarketRadar,
     openProject,
     openCoverWorkbenchPage,
     openContinuationImport,

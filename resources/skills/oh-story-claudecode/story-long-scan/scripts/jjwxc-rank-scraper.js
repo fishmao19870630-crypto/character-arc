@@ -3,18 +3,17 @@
  * 晋江文学城排行榜采集脚本
  *
  * 配合 browser-cdp skill 使用。先启动 Chrome CDP 环境，再运行本脚本。
- * 采集策略：晋江 topten.php 页面为纯文本格式，频道名直接出现，
- * 书目以标题/作者交替行呈现（无特殊前缀）。文本解析提取结构化数据。
- * 注：收藏数/营养液/积分等核心指标仅在作品详情页（需逐条访问），
- *     当前版本只提取榜单页可见数据（书名、作者）。
+ * 采集策略：从榜单 DOM 精确提取频道、书名、作者和作品链接，随后并发访问详情页，
+ * 补齐字数、收藏数、营养液、积分、状态、题材与简介。
  * 输出 Markdown 格式匹配 scan-output-format.md 规范。
  *
  * 用法：
  *   node jjwxc-rank-scraper.js --type 12              # 收入金榜
- *   node jjwxc-rank-scraper.js --type 7               # 月榜
- *   node jjwxc-rank-scraper.js --type 8               # 季度榜
- *   node jjwxc-rank-scraper.js --type 14              # 完结金榜
+ *   node jjwxc-rank-scraper.js --type 5               # 月榜
+ *   node jjwxc-rank-scraper.js --type 4               # 季度榜
+ *   node jjwxc-rank-scraper.js --type 16              # 完结金榜
  *   node jjwxc-rank-scraper.js --type all             # 全部榜单
+ *   node jjwxc-rank-scraper.js --type 12 --limit 10   # 每频道前 10 本（默认）
  *
  * 前置：
  *   node {SKILL_DIR}/browser-cdp/scripts/setup-cdp-chrome.js 9222
@@ -28,76 +27,101 @@ const BASE_URL = "https://www.jjwxc.net/topten.php";
 
 const RANK_TYPES = [
   { id: "12", label: "收入金榜" },
-  { id: "7", label: "月榜" },
-  { id: "8", label: "季度榜" },
-  { id: "14", label: "完结金榜" },
-  { id: "15", label: "新手金榜" },
-  { id: "17", label: "千字金榜" },
+  { id: "5", label: "月榜" },
+  { id: "4", label: "季度榜" },
+  { id: "16", label: "完结金榜" },
+  { id: "17", label: "新手金榜" },
+  { id: "21", label: "千字金榜" },
 ];
 
 // ---------------------------------------------------------------------------
 // 页面提取
 // ---------------------------------------------------------------------------
 
-/**
- * 提取晋江榜单数据。
- * 晋江 topten.php 页面为纯文本格式：
- *   频道名（如"古代言情"，无前缀）
- *   书名
- *   作者
- *   书名
- *   作者
- *   ...
- * 按频道分组，标题/作者交替解析。
- */
-function extractRankData(port) {
-  const js =
-    "JSON.stringify((()=>{" +
-    "var result={channels:[]};" +
-    "var text=document.body.innerText||'';" +
-    "var lines=text.split(/\\n/).map(function(l){return l.trim()}).filter(Boolean);" +
-    // 已知频道名列表
-    "var channels=['古代言情','现代言情','古代穿越','现代都市纯爱','现代幻想纯爱','古代纯爱','衍生纯爱','幻想现言','奇幻言情','未来游戏悬疑','百合','无CP','二次元言情','衍生言情','衍生无cp','未来幻想纯爱','原创轻小说','多元'];" +
-    "var channelSet={};channels.forEach(function(c){channelSet[c]=true});" +
-    "var curChannel='';" +
-    "var channelBooks={};" +
-    "var expectTitle=true;" +
-    "var pendingTitle='';" +
-    "for(var i=0;i<lines.length;i++){" +
-    "  var line=lines[i];" +
-    // 跳过附录区
-    "  if(/上榜天数记录|榜单说明/.test(line)){break}" +
-    // 跳过 UI 文字
-    "  if(/^(免费强推|vip强推|新晋作者|月榜|季榜|半年榜|长生殿|总分榜|字数榜|收入金榜|霸王票|霸王总榜|勤奋指数|完结金榜|新手金榜|栽培月榜|驻站|完结高分|千字金榜|完结全订榜)/.test(line)){continue}" +
-    "  if(line.length>30&&line.indexOf('·')>0)continue;" +
-    // 检测频道名
-    "  if(channelSet[line]){" +
-    "    if(curChannel&&channelBooks[curChannel])channelBooks[curChannel]._finished=true;" +
-    "    curChannel=line;" +
-    "    if(!channelBooks[curChannel])channelBooks[curChannel]={books:[],_finished:false};" +
-    "    expectTitle=true;pendingTitle='';continue" +
-    "  }" +
-    "  if(!curChannel)continue;" +
-    // 标题/作者交替
-    "  if(expectTitle){" +
-    "    pendingTitle=line;expectTitle=false" +
-    "  }else{" +
-    // 当前行为作者，上一行为标题
-    "    if(pendingTitle){" +
-    "      channelBooks[curChannel].books.push({title:pendingTitle,author:line})" +
-    "    }" +
-    "    expectTitle=true;pendingTitle=''" +
-    "  }" +
-    "}" +
-    // 转换输出
-    "for(var name in channelBooks){" +
-    "  if(channelBooks[name].books.length>0){" +
-    "    result.channels.push({name:name,books:channelBooks[name].books})" +
-    "  }" +
-    "}" +
-    "return result" +
-    "})())";
+function extractRankData(port, limit) {
+  const js = `(async()=>{
+    const clean=(value)=>String(value||'').replace(/\\s+/g,' ').trim();
+    const channels=[];
+    for(const heading of document.querySelectorAll('h5')){
+      const list=heading.nextElementSibling;
+      if(!list||list.tagName!=='UL')continue;
+      const books=Array.from(list.querySelectorAll(':scope > li')).slice(0,${limit}).map((item,index)=>{
+        const links=item.querySelectorAll('a');
+        const titleLink=links[0];
+        const authorLink=links[1];
+        return {
+          rank:index+1,
+          title:clean(titleLink?.textContent),
+          author:clean(authorLink?.textContent),
+          url:titleLink ? new URL(titleLink.getAttribute('href'),location.href).href : ''
+        };
+      }).filter((book)=>book.title&&book.author&&book.url);
+      if(books.length)channels.push({name:clean(heading.textContent),books});
+    }
+
+    if(!channels.length){
+      const table=Array.from(document.querySelectorAll('table')).find((candidate)=>{
+        const header=clean(candidate.querySelector('tr')?.textContent);
+        return header.includes('序号')&&header.includes('作者')&&header.includes('作品')&&header.includes('类型');
+      });
+      if(table){
+        const books=Array.from(table.querySelectorAll('tr')).slice(1).map((row)=>{
+          const cells=Array.from(row.querySelectorAll('td'));
+          if(cells.length<7)return null;
+          const titleLink=cells[2]?.querySelector('a[href]');
+          const rank=Number(clean(cells[0]?.textContent));
+          return {
+            rank,
+            title:clean(titleLink?.textContent||cells[2]?.textContent),
+            author:clean(cells[1]?.textContent),
+            url:titleLink ? new URL(titleLink.getAttribute('href'),location.href).href : '',
+            genre:clean(cells[3]?.textContent),
+            status:clean(cells[4]?.textContent),
+            words:clean(cells[5]?.textContent),
+            score:clean(cells[6]?.textContent)
+          };
+        }).filter((book)=>book&&book.rank&&book.title&&book.author&&book.url).slice(0,${limit});
+        if(books.length)channels.push({name:'全站',books});
+      }
+    }
+
+    const allBooks=channels.flatMap((channel)=>channel.books);
+    let cursor=0;
+    async function worker(){
+      while(cursor<allBooks.length){
+        const book=allBooks[cursor++];
+        try{
+          const response=await fetch(book.url,{credentials:'include'});
+          if(!response.ok)throw new Error('HTTP '+response.status);
+          const html=new TextDecoder('gb18030').decode(await response.arrayBuffer());
+          const doc=new DOMParser().parseFromString(html,'text/html');
+          const text=(selector)=>clean(doc.querySelector(selector)?.textContent);
+          book.genre=text('[itemprop="genre"]');
+          book.status=text('[itemprop="updataStatus"]');
+          book.words=text('[itemprop="wordCount"]');
+          book.collects=text('[itemprop="collectedCount"]');
+          book.nutrition=text('[itemprop="nutritionCount"]');
+          book.score=text('[itemprop="scoreCount"]');
+          book.totalClick=text('[itemprop="totalClick"]');
+          book.reviews=text('[itemprop="reviewCount"]');
+          book.desc=text('[itemprop="description"]');
+        }catch(error){
+          book.detailError=String(error?.message||error);
+        }
+      }
+    }
+    await Promise.all(Array.from({length:Math.min(8,allBooks.length)},worker));
+    return JSON.stringify({channels});
+  })()`;
   return evalJSON(port, js);
+}
+
+function truncateDescription(text, max = 100) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  if (clean.length <= max) return clean;
+  const head = clean.slice(0, max);
+  const end = Math.max(head.lastIndexOf("。"), head.lastIndexOf("！"), head.lastIndexOf("？"));
+  return `${head.slice(0, end >= max / 2 ? end + 1 : max)}...`;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,8 +131,10 @@ function extractRankData(port) {
 const args = process.argv.slice(2);
 const PORT = parseInt(getArg(args, "--port") || "9222", 10);
 const OUTDIR = getArg(args, "--outdir") || ".";
+const JSON_OUTPUT = getArg(args, "--json-output");
 const RANKTYPE = getArg(args, "--type") || "12";
 const CHANNEL = getArg(args, "--channel") || "0";
+const LIMIT = Math.min(50, Math.max(1, parseInt(getArg(args, "--limit") || "10", 10) || 10));
 
 function scrapeRank(port, rankTypeId, channelId) {
   const rt = RANK_TYPES.find((r) => r.id === rankTypeId);
@@ -127,7 +153,7 @@ function scrapeRank(port, rankTypeId, channelId) {
     ab(port, "open", url);
     sleep(4000);
 
-    data = extractRankData(port);
+    data = extractRankData(port, LIMIT);
     if (!data?.channels?.length) {
       console.error(`[jjwxc] 采集失败：页面结构可能已变（选择器没匹配到数据），请检查榜单URL或更新选择器 (${url})`);
       return null;
@@ -138,14 +164,10 @@ function scrapeRank(port, rankTypeId, channelId) {
   }
 
   let totalBooks = 0;
+  let completeBooks = 0;
   data.channels.forEach((ch) => {
     totalBooks += ch.books.length;
-    const authors = new Set(ch.books.map((b) => b.author));
-    if (ch.books.length >= 5 && authors.size / ch.books.length < 0.2) {
-      console.log(
-        `  ⚠ ${ch.name}：${ch.books.length} 本书只有 ${authors.size} 个唯一作者，可能提取有误`
-      );
-    }
+    completeBooks += ch.books.filter((b) => b.words && b.collects && (b.nutrition || b.score)).length;
   });
   console.log(
     `  ✓ 提取 ${data.channels.length} 个频道，共 ${totalBooks} 本`
@@ -159,6 +181,10 @@ function scrapeRank(port, rankTypeId, channelId) {
     `- 抓取时间：${now}`,
     `- 频道数：${data.channels.length}`,
     `- 总条目数：${totalBooks}`,
+    `- 每频道上限：${LIMIT}`,
+    `- 数据质量：${completeBooks === totalBooks ? "OK" : "存在问题"}`,
+    `- 有效详情：${completeBooks} / ${totalBooks}`,
+    `- 问题摘要：${completeBooks === totalBooks ? "无" : "部分详情页字段未返回，空值已标记[待补]"}`,
     "",
     "---",
     "",
@@ -171,7 +197,20 @@ function scrapeRank(port, rankTypeId, channelId) {
         try {
           const b = ch.books[i];
           lines.push(`### #${i + 1} ${b.title}`);
-          if (b.author) lines.push(`*${b.author}*`);
+          const meta = [
+            b.author,
+            b.genre || ch.name,
+            b.status || "[待补]",
+            b.words || "[待补]",
+            `收藏 ${b.collects || "[待补]"}`,
+            `营养液 ${b.nutrition || "[待补]"}`,
+            `积分 ${b.score || "[待补]"}`,
+          ].join(" · ");
+          lines.push(`*${meta}*`);
+          if (b.url) lines.push(`[作品页](${b.url})`);
+          const description = truncateDescription(b.desc);
+          if (description) lines.push("", "**简介**", "", description);
+          if (b.detailError) lines.push(`**详情采集：** [待补] ${b.detailError}`);
           lines.push("");
         } catch (bookErr) {
           console.error(`[jjwxc] ${rt.label} ${ch.name} 第${i + 1}条处理出错: ${bookErr.message}`);
@@ -184,18 +223,44 @@ function scrapeRank(port, rankTypeId, channelId) {
     }
   }
 
-  return lines.join("\n");
+  const books = data.channels.flatMap((ch) => ch.books.map((b, index) => ({
+    id: (b.url && new URL(b.url).searchParams.get("novelid")) || `${rankTypeId}-${ch.name}-${index + 1}`,
+    rank: index + 1,
+    title: b.title || "",
+    author: b.author || "",
+    category: ch.name || "",
+    subcategory: b.genre || "",
+    wordCount: b.words || "",
+    metric: [b.collects ? `收藏 ${b.collects}` : "", b.score ? `积分 ${b.score}` : ""].filter(Boolean).join(" · "),
+    description: truncateDescription(b.desc),
+    url: b.url || url,
+    status: b.status || "",
+  })));
+
+  return {
+    content: lines.join("\n"),
+    result: {
+      platform: "jjwxc",
+      platformLabel: "晋江文学城",
+      rankingType: rankTypeId,
+      rankingLabel: rt.label,
+      sourceUrl: url,
+      fetchedAt: Date.now(),
+      books,
+    },
+  };
 }
 
 function main() {
   const rankTypes =
     RANKTYPE === "all" ? RANK_TYPES.map((r) => r.id) : [RANKTYPE];
   const channels = [CHANNEL]; // 晋江频道 ID 需从页面获取，默认全站
+  const jsonResults = [];
 
   for (const rt of rankTypes) {
     for (const ch of channels) {
-      const content = scrapeRank(PORT, rt, ch);
-      if (!content) continue;
+      const output = scrapeRank(PORT, rt, ch);
+      if (!output) continue;
 
       const rtInfo = RANK_TYPES.find((r) => r.id === rt);
       const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
@@ -203,9 +268,16 @@ function main() {
       const filename = `晋江${rtInfo.label}_${chLabel}_${date}.md`;
       fs.mkdirSync(OUTDIR, { recursive: true });
       const filepath = path.join(OUTDIR, filename);
-      fs.writeFileSync(filepath, content, "utf-8");
+      fs.writeFileSync(filepath, output.content, "utf-8");
       console.log(`  ✓ 已保存: ${filepath}`);
+      jsonResults.push(output.result);
     }
+  }
+
+  if (JSON_OUTPUT) {
+    if (!jsonResults.length) throw new Error("没有生成有效榜单数据");
+    fs.mkdirSync(path.dirname(JSON_OUTPUT), { recursive: true });
+    fs.writeFileSync(JSON_OUTPUT, JSON.stringify(jsonResults.length === 1 ? jsonResults[0] : jsonResults), "utf-8");
   }
 }
 

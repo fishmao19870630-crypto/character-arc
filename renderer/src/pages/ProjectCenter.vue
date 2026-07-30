@@ -158,7 +158,7 @@ function requestDeleteProject(projectId: string): void {
         @continue-import="appStore.openContinuationImport()"
         @import="archiveImportRef?.pickArchive()"
         @open-deconstruction="openDeconstructionLibrary"
-        @open-fanqie-trends="appStore.openFanqieTrends()"
+        @open-market-radar="appStore.openMarketRadar()"
         @open-cover-workbench="openCoverWorkbenchPage"
         @open-skills="openSkillsPage"
         @open-settings="settingsVisible = true"

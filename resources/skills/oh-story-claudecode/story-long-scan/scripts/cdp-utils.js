@@ -8,7 +8,30 @@
  *   node {SKILL_DIR}/browser-cdp/scripts/setup-cdp-chrome.js 9222
  */
 
-const { execSync } = require("child_process");
+const { execFileSync } = require("child_process");
+const fs = require("fs");
+const path = require("path");
+
+function resolveAgentBrowser() {
+  if (process.env.AGENT_BROWSER_BIN) return process.env.AGENT_BROWSER_BIN;
+  if (process.platform !== "win32") return "agent-browser";
+
+  const arch = process.arch === "arm64" ? "arm64" : "x64";
+  const pathDirs = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
+  for (const dir of pathDirs) {
+    const candidates = [
+      path.join(dir, "agent-browser.exe"),
+      path.join(dir, "node_modules", "agent-browser", "bin", `agent-browser-win32-${arch}.exe`),
+      path.join(dir, "..", "agent-browser", "bin", `agent-browser-win32-${arch}.exe`),
+    ];
+    const found = candidates.find((candidate) => fs.existsSync(candidate));
+    if (found) return found;
+  }
+
+  throw new Error("未找到 agent-browser 原生可执行文件，请先运行 npm install -g agent-browser");
+}
+
+const AGENT_BROWSER = resolveAgentBrowser();
 
 // ---------------------------------------------------------------------------
 // agent-browser 工具函数
@@ -21,15 +44,21 @@ const { execSync } = require("child_process");
  * @returns {string} stdout（trim 后）
  */
 function ab(port, ...args) {
-  const cmd = args.map((a) => `"${a.replace(/"/g, '\\"')}"`).join(" ");
   try {
-    return execSync(`agent-browser --cdp ${port} ${cmd}`, {
-      encoding: "utf-8",
-      timeout: 20000,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
+    return execFileSync(
+      AGENT_BROWSER,
+      ["--cdp", String(port), ...args],
+      {
+        encoding: "utf-8",
+        timeout: Number(process.env.AGENT_BROWSER_TIMEOUT_MS) || 120000,
+        stdio: ["pipe", "pipe", "pipe"],
+      }
+    ).trim();
   } catch (e) {
-    return e.stdout?.trim() || "";
+    const stdout = e.stdout?.trim();
+    if (stdout) return stdout;
+    const stderr = e.stderr?.trim();
+    throw new Error(stderr || e.message);
   }
 }
 

@@ -13,6 +13,7 @@ import { getProjectSkillsDirPath as getSkillsDirPath } from './ai/skills/discove
 import { extractReferenceNovelContext, type ReferenceNovelLocalContext } from './referenceAnalysis'
 import { fetchWithCache } from './github-mirror'
 import { fetchFanqieTrends } from './fanqie-trends'
+import { fetchMarketRanking, openMarketPlatformLogin } from './market-radar'
 import { getWorkspaceDirPath } from './workspace-store'
 import { inspectContinuationNovelFile } from './continuation-import'
 import {
@@ -1540,6 +1541,19 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
     const remotePath = typeof payload?.path === 'string' ? payload.path : ''
     const force = payload?.force === true
     return fetchFanqieTrends(remotePath, force)
+  })
+
+  ipcMain.handle('characterarc:market-ranking-fetch', async (event, payload: { requestId?: string; platform?: string; rankingType?: string; force?: boolean }) => {
+    const requestId = typeof payload?.requestId === 'string' ? payload.requestId : ''
+    return fetchMarketRanking(payload?.platform, payload?.rankingType, payload?.force === true, (progress) => {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send('characterarc:market-ranking-progress', { ...progress, requestId })
+      }
+    })
+  })
+
+  ipcMain.handle('characterarc:market-platform-login', async (_event, payload: { platform?: string }) => {
+    return openMarketPlatformLogin(payload?.platform)
   })
 
   // ── AI 助手会话持久化 ──

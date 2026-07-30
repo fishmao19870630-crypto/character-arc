@@ -226,6 +226,17 @@ contextBridge.exposeInMainWorld('characterArc', {
   /** 抓取番茄风向标榜单数据（主进程带本地缓存，force=true 时强制刷新） */
   fetchFanqieTrends: (path: string, force = false) =>
     ipcRenderer.invoke('characterarc:fanqie-trends-fetch', { path, force }),
+  fetchMarketRanking: (platform: string, rankingType: string, force = false, requestId = '') =>
+    ipcRenderer.invoke('characterarc:market-ranking-fetch', { platform, rankingType, force, requestId }),
+  onMarketRankingProgress: (callback: (payload: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload)
+    ipcRenderer.on('characterarc:market-ranking-progress', listener)
+    return () => {
+      ipcRenderer.removeListener('characterarc:market-ranking-progress', listener)
+    }
+  },
+  openMarketPlatformLogin: (platform: string) =>
+    ipcRenderer.invoke('characterarc:market-platform-login', { platform }),
 
   // ── Assistant Runtime v2 ──
   /**

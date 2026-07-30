@@ -24,15 +24,15 @@ import {
   normalizeWorkspacePayload
 } from './workspace-types'
 import { ensureWorkspaceDb, getWorkspaceDbIfInitialized, readWorkspaceSnapshot, writeAppSettingsRow, writeWorkspaceSnapshot } from './workspace-store'
-
-const APP_DATA_DIR_NAME = 'CharacterArc'
+import { resolveUserDataPath, USER_DATA_PATH_ENV } from './user-data-path'
 
 function configureCanonicalUserDataPath(): void {
   const appDataPath = app.getPath('appData')
-  const canonicalUserDataPath = join(appDataPath, APP_DATA_DIR_NAME)
+  const resolvedPath = resolveUserDataPath(appDataPath, app.isPackaged, process.env[USER_DATA_PATH_ENV])
+  const canonicalUserDataPath = resolvedPath.path
   const legacyUserDataPath = join(appDataPath, 'characterarc')
 
-  if (!existsSync(canonicalUserDataPath) && existsSync(legacyUserDataPath)) {
+  if (app.isPackaged && !resolvedPath.isOverride && !existsSync(canonicalUserDataPath) && existsSync(legacyUserDataPath)) {
     mkdirSync(canonicalUserDataPath, { recursive: true })
     cpSync(legacyUserDataPath, canonicalUserDataPath, { recursive: true, force: false, errorOnExist: false })
   }
@@ -81,8 +81,14 @@ function appendAiRunToLatestSnapshot(payload: WorkspaceAiRunEventPayload): void 
 }
 
 function emitAiRunEvent(payload: WorkspaceAiRunEventPayload): void {
-  appendAiRunToLatestSnapshot(payload)
-  windowManager.broadcastWindowEvent('characterarc:ai-run-event', payload)
+  try {
+    const cloneablePayload = JSON.parse(JSON.stringify(payload)) as WorkspaceAiRunEventPayload
+    appendAiRunToLatestSnapshot(cloneablePayload)
+    windowManager.broadcastWindowEvent('characterarc:ai-run-event', cloneablePayload)
+  } catch (error) {
+    // AI 运行记录属于旁路功能，不能因为事件序列化失败而覆盖已经生成成功的结果。
+    console.warn('[ai-run-event] 事件序列化失败，已跳过本次运行记录广播', error)
+  }
 }
 
 function emitChapterStateWarnings(payload: ChapterStateWarningsPayload): void {

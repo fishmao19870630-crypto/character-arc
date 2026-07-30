@@ -13,6 +13,7 @@ import DeconstructionLibraryPage from '@/pages/DeconstructionLibraryPage.vue'
 import SkillsPage from '@/pages/SkillsPage.vue'
 import CoverWorkbenchPage from '@/pages/CoverWorkbenchPage.vue'
 import FanqieTrendsPage from '@/pages/FanqieTrendsPage.vue'
+import MarketRadarPage from '@/pages/MarketRadarPage.vue'
 import AiTaskProgressDock from '@/components/AiTaskProgressDock.vue'
 import TitlebarModelSwitcher from '@/components/TitlebarModelSwitcher.vue'
 
@@ -221,6 +222,7 @@ onBeforeUnmount(() => {
               <SkillsPage v-else-if="appStore.currentView === 'skills'" key="skills" />
               <CoverWorkbenchPage v-else-if="appStore.currentView === 'cover-workbench'" key="cover-workbench" />
               <FanqieTrendsPage v-else-if="appStore.currentView === 'fanqie-trends'" key="fanqie-trends" />
+              <MarketRadarPage v-else-if="appStore.currentView === 'market-radar'" key="market-radar" />
               <WorkbenchPage v-else key="workbench" />
             </Transition>
           </div>

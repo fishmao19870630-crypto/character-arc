@@ -107,7 +107,7 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
       const response = await runAiTask(payload, knowledgeContext, controller.signal)
 
       deps!.emitAiRunEvent({ projectId: response.meta.projectId ?? '', meta: { id: randomUUID(), ...response.meta } })
-      return { success: true, result: response.result }
+      return { success: true, result: JSON.parse(JSON.stringify(response.result)) as typeof response.result }
     } catch (error) {
       const aiRunMeta = error && typeof error === 'object' && 'aiRunMeta' in error
         ? (error as { aiRunMeta?: Record<string, unknown> }).aiRunMeta : undefined

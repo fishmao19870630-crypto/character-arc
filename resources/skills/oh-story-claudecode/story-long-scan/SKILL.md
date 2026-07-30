@@ -321,9 +321,9 @@ URL 参数：`/rank/{channel}_{type}_{cat_id}`，channel 0=女频/1=男频，typ
 | [scripts/cdp-utils.js](scripts/cdp-utils.js) | CDP 公共工具函数（ab/sleep/evalJSON/safeStr/scrollLoad/getArg），各采集脚本共用 |
 | [scripts/fanqie-rank-scraper.js](scripts/fanqie-rank-scraper.js) | 番茄榜单采集，通过详情页绕过字体反爬，配合 browser-cdp 使用 |
 | [scripts/qidian-rank-scraper.js](scripts/qidian-rank-scraper.js) | 起点榜单采集（畅销/月票/新书等），默认移动端 SSR 提取，PC/CDP 回退 |
-| [scripts/qimao-rank-scraper.js](scripts/qimao-rank-scraper.js) | 七猫榜单采集（大热/新书/完结等），tab 切换+滚动加载 |
-| [scripts/jjwxc-rank-scraper.js](scripts/jjwxc-rank-scraper.js) | 晋江榜单采集（收入金榜/月榜等），按频道分组提取 |
-| [scripts/ciweimao-rank-scraper.js](scripts/ciweimao-rank-scraper.js) | 刺猬猫榜单采集（点击/收藏/月票等），单页 9 榜提取 |
+| [scripts/qimao-rank-scraper.js](scripts/qimao-rank-scraper.js) | 七猫榜单采集（大热/新书/完结等），tab 切换并提取完整榜单字段 |
+| [scripts/jjwxc-rank-scraper.js](scripts/jjwxc-rank-scraper.js) | 晋江榜单采集（收入金榜/月榜等），按频道提取并从详情页补齐收藏、积分、字数和简介 |
+| [scripts/ciweimao-rank-scraper.js](scripts/ciweimao-rank-scraper.js) | 刺猬猫榜单采集（点击/收藏/月票等），单页 9 榜并按作品去重补齐详情字段 |
 
 ---
 

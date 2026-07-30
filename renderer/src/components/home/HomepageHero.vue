@@ -13,7 +13,7 @@ const emit = defineEmits<{
   (e: 'continueImport'): void
   (e: 'import'): void
   (e: 'openDeconstruction'): void
-  (e: 'openFanqieTrends'): void
+  (e: 'openMarketRadar'): void
   (e: 'openCoverWorkbench'): void
   (e: 'openSkills'): void
   (e: 'openSettings'): void
@@ -38,7 +38,7 @@ const emit = defineEmits<{
         <RefreshCw :size="18" />
         <span v-if="updateStatus && updateStatus !== 'none'" class="status-dot" :class="`status-dot--${updateStatus}`" />
       </button>
-      <button class="hero-icon-btn" title="番茄风向标" @click="emit('openFanqieTrends')">
+      <button class="hero-icon-btn" title="市场雷达" @click="emit('openMarketRadar')">
         <Flame :size="18" />
       </button>
 
