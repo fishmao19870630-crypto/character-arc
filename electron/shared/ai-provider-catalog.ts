@@ -101,6 +101,11 @@ export function isOpenAIChatProtocol(provider: string, model = ''): boolean {
   return resolveAiProviderProtocol(provider, model) === 'openai-chat'
 }
 
+export function shouldBufferOpenCodeChat(provider: string, model = ''): boolean {
+  return provider.trim().toLowerCase() === 'opencode-zen'
+    && isOpenAIChatProtocol(provider, model)
+}
+
 export function isSupportedProviderModel(provider: string, model: string): boolean {
   if (provider.trim().toLowerCase() !== 'opencode-zen') return true
   return !model.trim().toLowerCase().startsWith('gemini-')

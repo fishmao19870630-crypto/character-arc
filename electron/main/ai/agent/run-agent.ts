@@ -1,9 +1,10 @@
-import { streamText, stepCountIs, dynamicTool, jsonSchema } from 'ai'
+import { generateText, streamText, stepCountIs, dynamicTool, jsonSchema } from 'ai'
 import { buildSystemPrompt, createModel } from '../provider'
 import type { AiRunUsage, AppSettings, AiAgentStreamHandlers, ToolCallTrace } from '../shared-types'
 import type { Tool, ToolContext } from './tools/types'
 import { stripReasoningMarkup } from '../reasoning'
 import { isAiStreamIdleTimeoutError } from '../sse'
+import { shouldBufferOpenCodeChat } from '@shared/ai-provider-catalog'
 
 export type RunAgentParams = {
   settings: AppSettings
@@ -22,6 +23,21 @@ export type RunAgentResult = {
   toolCalls: ToolCallTrace[]
   iterations: number
   usage?: AiRunUsage
+}
+
+type AgentToolCallStartEvent = {
+  toolCall: {
+    toolCallId: string
+    toolName: string
+    input: unknown
+  }
+}
+
+type AgentToolCallFinishEvent = AgentToolCallStartEvent & {
+  durationMs?: number
+  success: boolean
+  output?: unknown
+  error?: unknown
 }
 
 /** 步数耗尽收尾后，可见正文仍低于此长度则视为「未产出有效答案」。 */
@@ -88,6 +104,68 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
 
   params.handlers.onAgentStatus('正在思考...', 1, maxSteps)
 
+  const onToolCallStart = ({ toolCall }: AgentToolCallStartEvent): void => {
+    const id = toolCall.toolCallId
+    toolStartTimes.set(id, Date.now())
+    params.handlers.onToolUseStart(id, toolCall.toolName, (toolCall.input as Record<string, unknown>) ?? {})
+  }
+  const onToolCallFinish = (event: AgentToolCallFinishEvent): void => {
+    const id = event.toolCall.toolCallId
+    const startedAt = toolStartTimes.get(id) ?? Date.now()
+    const durationMs = event.durationMs ?? (Date.now() - startedAt)
+    const errored = !event.success
+    const content = errored
+      ? String(event.error ?? '')
+      : typeof event.output === 'string' ? event.output : JSON.stringify(event.output ?? '')
+    params.handlers.onToolResult(id, event.toolCall.toolName, content.slice(0, 800), errored, durationMs)
+    toolCalls.push({
+      tool: event.toolCall.toolName,
+      args: (event.toolCall.input as Record<string, unknown>) ?? {},
+      durationMs,
+      status: errored ? 'error' : 'ok',
+      ...(errored ? { error: content.slice(0, 240) } : {})
+    })
+  }
+  const onStepFinish = (): void => {
+    stepCount++
+    if (stepCount < maxSteps) {
+      params.handlers.onAgentStatus(`第 ${stepCount + 1} 轮推理...`, stepCount + 1, maxSteps)
+    }
+  }
+
+  if (shouldBufferOpenCodeChat(params.settings.provider, params.settings.model)) {
+    const bufferedResult = await generateText({
+      model: createModel(params.settings, undefined, { buffered: true }),
+      system: buildSystemPrompt(params.settings, params.systemPrompt),
+      prompt: params.userPrompt,
+      ...(params.disableTools ? {} : { tools: sdkTools, stopWhen: stepCountIs(maxSteps) }),
+      maxOutputTokens: params.maxTokens,
+      abortSignal: params.ctx.signal,
+      experimental_onToolCallStart: onToolCallStart,
+      experimental_onToolCallFinish: onToolCallFinish,
+      onStepFinish
+    })
+    const finalText = stripReasoningMarkup(bufferedResult.text)
+    if (finalText) params.handlers.onTextDelta(finalText)
+    const usage = toUsage(bufferedResult.totalUsage)
+
+    if (!finalText.trim() && bufferedResult.finishReason === 'length') {
+      throw new Error('模型输出被截断（finish_reason=length），未产生可见回复。请提高输出上限后重试。')
+    }
+    if (!finalText.trim() && bufferedResult.finishReason === 'tool-calls') {
+      throw new Error(
+        `Agent 在 ${maxSteps} 步内未能产出最终答案（工具调用次数达上限）。请简化请求，或在设置中提高步数上限后重试。`
+      )
+    }
+
+    return {
+      finalText,
+      toolCalls,
+      iterations: stepCount,
+      usage: Object.values(usage).some((value) => value !== undefined) ? usage : undefined
+    }
+  }
+
   let fullText = ''
   let firstAttemptReasoning = ''
 
@@ -102,34 +180,9 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
     maxOutputTokens: params.maxTokens,
     abortSignal: params.ctx.signal,
     onError: ({ error }) => captureError(error),
-    experimental_onToolCallStart: ({ toolCall }) => {
-      const id = toolCall.toolCallId
-      toolStartTimes.set(id, Date.now())
-      params.handlers.onToolUseStart(id, toolCall.toolName, (toolCall.input as Record<string, unknown>) ?? {})
-    },
-    experimental_onToolCallFinish: (event) => {
-      const id = event.toolCall.toolCallId
-      const startedAt = toolStartTimes.get(id) ?? Date.now()
-      const durationMs = event.durationMs ?? (Date.now() - startedAt)
-      const errored = !event.success
-      const content = errored
-        ? String(event.error ?? '')
-        : typeof event.output === 'string' ? event.output : JSON.stringify(event.output ?? '')
-      params.handlers.onToolResult(id, event.toolCall.toolName, content.slice(0, 800), errored, durationMs)
-      toolCalls.push({
-        tool: event.toolCall.toolName,
-        args: (event.toolCall.input as Record<string, unknown>) ?? {},
-        durationMs,
-        status: errored ? 'error' : 'ok',
-        ...(errored ? { error: content.slice(0, 240) } : {})
-      })
-    },
-    onStepFinish: () => {
-      stepCount++
-      if (stepCount < maxSteps) {
-        params.handlers.onAgentStatus(`第 ${stepCount + 1} 轮推理...`, stepCount + 1, maxSteps)
-      }
-    }
+    experimental_onToolCallStart: onToolCallStart,
+    experimental_onToolCallFinish: onToolCallFinish,
+    onStepFinish
   })
 
   let result: ReturnType<typeof startStream> | null = null

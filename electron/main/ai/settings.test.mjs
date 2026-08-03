@@ -5,7 +5,8 @@ import {
   getAiProviderCatalogEntry,
   normalizeAiBaseUrl,
   normalizeAiProviderName,
-  resolveAiProviderProtocol
+  resolveAiProviderProtocol,
+  shouldBufferOpenCodeChat
 } from '../../shared/ai-provider-catalog.ts'
 
 test('厂商预设会补齐默认地址和推荐模型', () => {
@@ -35,4 +36,12 @@ test('OpenCode Zen 根据模型族选择协议', () => {
   assert.equal(resolveAiProviderProtocol('opencode-zen', 'qwen3.7-plus'), 'anthropic')
   assert.equal(resolveAiProviderProtocol('opencode-zen', 'deepseek-v4-pro'), 'openai-chat')
   assert.equal(resolveAiProviderProtocol('opencode-zen', 'kimi-k2.6'), 'openai-chat')
+})
+
+test('仅 OpenCode Zen 的 Chat Completions 模型使用完整响应缓冲', () => {
+  assert.equal(shouldBufferOpenCodeChat('opencode-zen', 'deepseek-v4-flash-free'), true)
+  assert.equal(shouldBufferOpenCodeChat('opencode-zen', 'kimi-k2.6'), true)
+  assert.equal(shouldBufferOpenCodeChat('opencode-zen', 'gpt-5.6-sol'), false)
+  assert.equal(shouldBufferOpenCodeChat('opencode-zen', 'claude-sonnet-4-6'), false)
+  assert.equal(shouldBufferOpenCodeChat('deepseek', 'deepseek-chat'), false)
 })

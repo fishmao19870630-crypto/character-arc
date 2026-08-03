@@ -138,13 +138,20 @@ function createOpenAICompatibleProvider(settings: AppSettings, customFetch?: typ
   })
 }
 
-export function createModel(settings: AppSettings, onReasoningDelta?: (delta: string) => void): LanguageModel {
+export function createModel(
+  settings: AppSettings,
+  onReasoningDelta?: (delta: string) => void,
+  options?: { buffered?: boolean }
+): LanguageModel {
   const requestFetch = createProxyFetch(settings.proxyUrl)
+  const configuredTimeoutMs = Math.max(30_000, (settings.aiTimeoutSeconds ?? 180) * 1000)
   const customFetch = createReasoningInterceptedFetch(
     onReasoningDelta,
     requestFetch,
     resolveStreamIdleTimeoutMs(settings),
-    Math.min(DEFAULT_RESPONSE_START_TIMEOUT_MS, resolveStreamIdleTimeoutMs(settings))
+    options?.buffered
+      ? configuredTimeoutMs
+      : Math.min(DEFAULT_RESPONSE_START_TIMEOUT_MS, resolveStreamIdleTimeoutMs(settings))
   )
   if (isAnthropicProtocol(settings.provider, settings.model)) {
     const anthropic = createAnthropic({
