@@ -4,6 +4,7 @@ import type { LanguageModel } from 'ai'
 import type { AppSettings } from './shared-types'
 import { extractReasoningText } from './reasoning'
 import { createProxyFetch } from './proxy-fetch'
+import { splitCompleteSseEvents } from './sse'
 
 const ANTHROPIC_PROMPT_CACHE = {
   type: 'ephemeral' as const,
@@ -73,17 +74,15 @@ export function createReasoningInterceptedFetch(
             return
           }
           buffer += decoder.decode(value, { stream: true })
-          // 按 SSE 事件边界（双换行）切分，把不完整事件留在 buffer 里下一轮处理
-          const events: string[] = []
-          let idx: number
-          while ((idx = buffer.indexOf('\n\n')) !== -1) {
-            events.push(buffer.slice(0, idx + 2))
-            buffer = buffer.slice(idx + 2)
-          }
+          // SSE 既可能使用 LF，也可能使用 HTTP 常见的 CRLF；两者都要实时切分。
+          // 只查找 `\n\n` 会让 CRLF 响应一直留在 buffer，直到上游结束才显示内容。
+          const split = splitCompleteSseEvents(buffer)
+          const events = split.events
+          buffer = split.remainder
 
           let outChunk = ''
           for (const event of events) {
-            const lines = event.split('\n')
+            const lines = event.split(/\r?\n/)
             const rebuilt: string[] = []
             for (const line of lines) {
               if (!line.startsWith('data:')) {
