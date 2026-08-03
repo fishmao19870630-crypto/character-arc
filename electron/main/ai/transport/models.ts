@@ -1,7 +1,11 @@
 import type { AppSettings } from '../shared-types'
 import { normalizeSettings } from '../settings'
 import { createProxyFetch } from '../proxy-fetch'
-import { isAnthropicProtocol, isSupportedProviderModel } from '@shared/ai-provider-catalog'
+import {
+  isAnthropicProtocol,
+  isOpenCodeProvider,
+  isSupportedProviderModel
+} from '@shared/ai-provider-catalog'
 
 /** 从模型列表接口获取到的模型信息 */
 export interface FetchedModel {
@@ -21,6 +25,7 @@ const KNOWN_COMPAT_SUFFIXES = [
 
 const KNOWN_ENDPOINT_SUFFIXES = [
   '/chat/completions',
+  '/messages',
   '/responses',
   '/embeddings',
   '/models',
@@ -138,7 +143,7 @@ export async function fetchModels(settings: AppSettings): Promise<FetchedModel[]
   }
   const rawBaseUrl = (settings.baseUrl?.trim() || '').replace(/\/+$/, '')
   const requestFetch = createProxyFetch(normalized.proxyUrl)
-  const models = isAnthropicProtocol(normalized.provider, normalized.model) && normalized.provider !== 'opencode-zen'
+  const models = isAnthropicProtocol(normalized.provider, normalized.model) && !isOpenCodeProvider(normalized.provider)
     ? await fetchModelsAnthropic(rawBaseUrl || normalized.baseUrl, normalized.apiKey, requestFetch)
     : await fetchModelsOpenAiCompatible(rawBaseUrl || normalized.baseUrl, normalized.apiKey, requestFetch)
   return models.filter((model) => isSupportedProviderModel(normalized.provider, model.id))

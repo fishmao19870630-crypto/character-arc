@@ -25,6 +25,7 @@ export const AI_PROVIDER_CATALOG: readonly AiProviderCatalogEntry[] = [
   { label: 'xAI', value: 'xai', protocol: 'openai-chat', baseUrl: 'https://api.x.ai/v1', model: 'grok-4-latest', customBaseUrl: false, supportsEmbedding: false, hint: 'xAI 官方 OpenAI 兼容接口。' },
   { label: 'Google Gemini', value: 'gemini', protocol: 'openai-chat', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-pro', customBaseUrl: false, supportsEmbedding: false, hint: 'Google 官方 OpenAI 兼容入口。' },
   { label: '火山方舟', value: 'volcengine', protocol: 'openai-chat', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: '', customBaseUrl: false, supportsEmbedding: false, hint: '火山方舟官方接口，模型名称请填写推理接入点 ID。' },
+  { label: 'OpenCode Go', value: 'opencode-go', protocol: 'openai-chat', baseUrl: 'https://opencode.ai/zen/go/v1', model: 'deepseek-v4-flash', customBaseUrl: false, supportsEmbedding: false, hint: 'Go 订阅接口，自动按模型选择 Responses、Messages 或 Chat Completions 协议。' },
   { label: 'OpenCode Zen', value: 'opencode-zen', protocol: 'openai-chat', baseUrl: 'https://opencode.ai/zen/v1', model: 'claude-sonnet-4-6', customBaseUrl: false, supportsEmbedding: false, hint: '自动按模型选择 Responses、Messages 或 Chat Completions 协议。' },
   { label: 'Ollama（本地）', value: 'ollama', protocol: 'openai-chat', baseUrl: 'http://localhost:11434/v1', model: '', customBaseUrl: false, supportsEmbedding: true, hint: '本地 Ollama 服务，不需要 API Key。' },
   { label: '自定义 OpenAI 兼容接口', value: 'openai-compatible', protocol: 'openai-chat', baseUrl: '', model: '', customBaseUrl: true, supportsEmbedding: true, hint: '填写完整 API Base URL，例如 https://example.com/v1。' },
@@ -38,6 +39,7 @@ export function getAiProviderCatalogEntry(provider: string): AiProviderCatalogEn
 
 const KNOWN_ENDPOINT_SUFFIXES = [
   '/chat/completions',
+  '/messages',
   '/responses',
   '/embeddings',
   '/models',
@@ -51,17 +53,31 @@ function stripKnownEndpointSuffix(baseUrl: string): string {
 }
 
 export function isOpenCodeZenBaseUrl(baseUrl: string): boolean {
-  return /^https?:\/\/opencode\.ai\/zen(?:\/|$)/i.test(baseUrl.trim())
+  return /^https?:\/\/opencode\.ai\/zen(?!(?:\/go)(?:\/|$))(?:\/|$)/i.test(baseUrl.trim())
+}
+
+export function isOpenCodeGoBaseUrl(baseUrl: string): boolean {
+  return /^https?:\/\/opencode\.ai\/zen\/go(?:\/|$)/i.test(baseUrl.trim())
+}
+
+export function isOpenCodeProvider(provider: string): boolean {
+  const normalized = provider.trim().toLowerCase()
+  return normalized === 'opencode-go' || normalized === 'opencode-zen'
 }
 
 export function normalizeAiProviderName(provider: string, baseUrl: string): string {
   const normalized = provider.trim().toLowerCase() || 'openai-compatible'
+  if (isOpenCodeGoBaseUrl(baseUrl)) return 'opencode-go'
   return isOpenCodeZenBaseUrl(baseUrl) ? 'opencode-zen' : normalized
 }
 
 export function normalizeAiBaseUrl(provider: string, rawBaseUrl: string): string {
   let baseUrl = stripKnownEndpointSuffix(rawBaseUrl.trim().replace(/\/+$/, ''))
   if (!baseUrl) return ''
+
+  if (provider === 'opencode-go' || isOpenCodeGoBaseUrl(baseUrl)) {
+    return baseUrl.replace(/\/zen\/go(?:\/v1)?$/i, '/zen/go/v1')
+  }
 
   if (provider === 'opencode-zen' || isOpenCodeZenBaseUrl(baseUrl)) {
     return baseUrl.replace(/\/zen(?:\/v1)?$/i, '/zen/v1')
@@ -84,6 +100,12 @@ export function resolveAiProviderProtocol(provider: string, model = ''): AiProvi
   const normalizedProvider = provider.trim().toLowerCase()
   const normalizedModel = model.trim().toLowerCase()
 
+  if (normalizedProvider === 'opencode-go') {
+    if (/^gpt-5\.6-luna(?:[.-]|$)/.test(normalizedModel)) return 'openai-responses'
+    if (/^(minimax-|qwen3(?:[.-]|$))/.test(normalizedModel)) return 'anthropic'
+    return 'openai-chat'
+  }
+
   if (normalizedProvider === 'opencode-zen') {
     if (/^(claude-|qwen3(?:[.-]|$))/.test(normalizedModel)) return 'anthropic'
     if (/^(gpt-|grok-)/.test(normalizedModel)) return 'openai-responses'
@@ -102,7 +124,7 @@ export function isOpenAIChatProtocol(provider: string, model = ''): boolean {
 }
 
 export function shouldBufferOpenCodeChat(provider: string, model = ''): boolean {
-  return provider.trim().toLowerCase() === 'opencode-zen'
+  return isOpenCodeProvider(provider)
     && isOpenAIChatProtocol(provider, model)
 }
 
