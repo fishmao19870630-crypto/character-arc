@@ -114,6 +114,10 @@ function compareVersions(a: string, b: string): number {
 type RegisterMainIpcHandlersDeps = {
   windowManager: WindowManager
   setLatestWorkspaceSnapshot: (payload: unknown) => void
+  setLatestAppSettings: (
+    settings: unknown,
+    metadata: { theme: string; selectedProjectId: string }
+  ) => void
   normalizeWorkspacePayload: (payload: unknown) => unknown
   ensureWorkspaceDb: () => Promise<DatabaseSync>
   readWorkspaceSnapshot: (db: DatabaseSync) => unknown
@@ -1361,7 +1365,9 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
       }
       const theme = typeof record.theme === 'string' ? record.theme : 'ocean'
       const selectedProjectId = typeof record.selectedProjectId === 'string' ? record.selectedProjectId : ''
-      deps.writeAppSettingsRow(db, record.appSettings, { theme, selectedProjectId })
+      const metadata = { theme, selectedProjectId }
+      deps.writeAppSettingsRow(db, record.appSettings, metadata)
+      deps.setLatestAppSettings(record.appSettings, metadata)
       nativeTheme.themeSource = (record.appSettings as { darkMode?: boolean } | undefined)?.darkMode ? 'dark' : 'light'
       return { success: true }
     } catch (error) {

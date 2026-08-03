@@ -2,6 +2,7 @@ import type { AppSettings } from './shared-types'
 import { normalizeSettings } from './settings'
 import { ensureWorkspaceDb } from '../workspace-store'
 import { createProxyFetch } from './proxy-fetch'
+import { getAiProviderCatalogEntry, isAnthropicProtocol } from '@shared/ai-provider-catalog'
 
 /** 每次向 Embedding API 发送的最大文本条数 */
 const MAX_BATCH_SIZE = 16
@@ -9,9 +10,6 @@ const MAX_BATCH_SIZE = 16
 const EMBEDDING_REQUEST_TIMEOUT_MS = 20_000
 /** 无法从聊天模型推断 embedding 模型时的兜底候选列表 */
 const EMBEDDING_MODEL_FALLBACKS = ['text-embedding-3-small', 'text-embedding-ada-002', 'embedding-2']
-
-/** 已知不支持 Embedding 接口的供应商 */
-const PROVIDERS_WITHOUT_EMBEDDINGS: ReadonlySet<string> = new Set(['anthropic'])
 
 /** 已观测到的 embedding 维度缓存，key 格式为 `provider:model` */
 const observedDimensions = new Map<string, number>()
@@ -74,7 +72,8 @@ export class EmbeddingDimensionMismatchError extends Error {
 export function providerSupportsEmbedding(settings: AppSettings): boolean {
   const provider = (settings.provider ?? '').trim().toLowerCase()
   if (!provider) return true
-  return !PROVIDERS_WITHOUT_EMBEDDINGS.has(provider)
+  const preset = getAiProviderCatalogEntry(provider)
+  return preset?.supportsEmbedding !== false && !isAnthropicProtocol(provider, settings.model)
 }
 
 /**

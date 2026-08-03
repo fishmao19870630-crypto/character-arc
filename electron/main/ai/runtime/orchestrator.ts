@@ -385,7 +385,7 @@ export async function testAiConnection(rawSettings: AppSettings): Promise<{ prov
     user: 'Return CONNECTED'
   }
   logPrompt('TEST', settings, probePrompt, 'test-connection')
-  const text = await aiGenerateText(settings, probePrompt)
+  const text = await aiGenerateText(settings, probePrompt, 16, undefined, { forceNonStreaming: true })
   if (!text.trim()) {
     throw new Error('模型连接成功，但没有返回可读内容。')
   }

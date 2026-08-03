@@ -21,6 +21,7 @@ import {
   type WorkspaceAiRunRecord,
   type WorkspaceKnowledgeDocument,
   type WorkspacePayload,
+  mergeAppSettingsIntoWorkspaceSnapshot,
   normalizeWorkspacePayload
 } from './workspace-types'
 import { ensureWorkspaceDb, getWorkspaceDbIfInitialized, readWorkspaceSnapshot, writeAppSettingsRow, writeWorkspaceSnapshot } from './workspace-store'
@@ -69,6 +70,17 @@ const windowManager = createWindowManager()
 
 function updateLatestWorkspaceSnapshot(payload: WorkspacePayload | null): void {
   latestWorkspaceSnapshot = payload
+}
+
+function updateLatestAppSettings(
+  settings: Partial<WorkspacePayload['appSettings']>,
+  metadata: { theme: string; selectedProjectId: string }
+): void {
+  latestWorkspaceSnapshot = mergeAppSettingsIntoWorkspaceSnapshot(
+    latestWorkspaceSnapshot,
+    settings,
+    metadata
+  )
 }
 
 function appendAiRunToLatestSnapshot(payload: WorkspaceAiRunEventPayload): void {
@@ -558,6 +570,9 @@ registerMainIpcHandlers({
   windowManager,
   setLatestWorkspaceSnapshot: (payload) => {
     updateLatestWorkspaceSnapshot(payload as WorkspacePayload | null)
+  },
+  setLatestAppSettings: (settings, metadata) => {
+    updateLatestAppSettings(settings as Partial<WorkspacePayload['appSettings']>, metadata)
   },
   normalizeWorkspacePayload: (payload) => normalizeWorkspacePayload(payload as WorkspacePayload | LegacyWorkspacePayload),
   ensureWorkspaceDb,

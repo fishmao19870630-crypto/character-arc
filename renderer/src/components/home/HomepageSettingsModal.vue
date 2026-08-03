@@ -217,13 +217,14 @@ function toOptionalNumber(value: number | null): number | undefined {
 
 function handleAddProfile(): void {
   const id = generateProfileId()
+  const defaults = resolveProviderDefaults('deepseek')
   const newProfile: AiProfile = {
     id,
-    name: generateUniqueName('新接口配置'),
-    provider: 'openai-compatible',
-    baseUrl: '',
+    name: generateUniqueName('DeepSeek'),
+    provider: 'deepseek',
+    baseUrl: defaults.baseUrl,
     apiKey: '',
-    model: '',
+    model: defaults.model,
     temperature: undefined,
     topP: undefined
   }
@@ -473,31 +474,31 @@ async function saveSettings(): Promise<void> {
               </n-form-item>
             </div>
             <div class="settings-grid">
-              <n-form-item label="协议类型">
+              <n-form-item label="模型厂商">
                 <n-select
                   :options="providerOptions"
                   :value="editingProfile.provider"
                   @update:value="(value) => handleProviderChange(value ?? 'openai-compatible')"
                 />
               </n-form-item>
-              <n-form-item label="Base URL">
-                <n-input
-                  :value="editingProfile.baseUrl"
-                  :placeholder="editingProfile.provider === 'anthropic' ? '例如：https://api.anthropic.com（自动补 /v1）' : '例如：https://api.deepseek.com/v1'"
-                  @update:value="(value) => updateEditingProfile({ baseUrl: value })"
-                />
-              </n-form-item>
-            </div>
-            <div class="settings-grid">
               <n-form-item label="API Key">
                 <n-input
                   type="password"
                   show-password-on="click"
                   :value="editingProfile.apiKey"
-                  placeholder="填写接口对应的 API Key / Token"
+                  :placeholder="editingProfile.provider === 'ollama' ? '本地服务无需填写' : '填写厂商提供的 API Key / Token'"
                   @update:value="(value) => updateEditingProfile({ apiKey: value })"
                 />
               </n-form-item>
+            </div>
+            <n-form-item v-if="activeProviderPreset.customBaseUrl" label="Base URL">
+              <n-input
+                :value="editingProfile.baseUrl"
+                placeholder="填写完整 API Base URL，例如：https://example.com/v1"
+                @update:value="(value) => updateEditingProfile({ baseUrl: value })"
+              />
+            </n-form-item>
+            <div>
               <n-form-item label="模型名称">
                 <div class="model-input-row">
                   <n-select
@@ -512,13 +513,14 @@ async function saveSettings(): Promise<void> {
                   <n-input
                     v-else
                     :value="editingProfile.model"
-                    placeholder="填写 URL 和 Key 后可点右侧按钮拉取"
+                    placeholder="填写 Key 后可点右侧按钮拉取或手动输入"
                     @update:value="(value) => updateEditingProfile({ model: value })"
                   />
                   <n-button
                     quaternary
                     class="model-fetch-btn"
-                    :disabled="isFetchingModels || !editingProfile.baseUrl.trim()"
+                    title="获取模型列表"
+                    :disabled="isFetchingModels || !editingProfile.baseUrl.trim() || (editingProfile.provider !== 'ollama' && !editingProfile.apiKey.trim())"
                     @click="handleFetchModels"
                   >
                     <template #icon>

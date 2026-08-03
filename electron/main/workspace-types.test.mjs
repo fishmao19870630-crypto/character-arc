@@ -1,0 +1,54 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+
+import { mergeAppSettingsIntoWorkspaceSnapshot } from './workspace-types.ts'
+
+test('保存 AI 设置时刷新内存快照并保留未落盘的工作区数据', () => {
+  const workspaceMarker = { unsaved: true }
+  const snapshot = {
+    theme: 'ocean',
+    selectedProjectId: 'project-old',
+    projects: [],
+    workspaces: { 'project-old': workspaceMarker },
+    knowledgeDocuments: [],
+    referenceWorks: [],
+    coverWorkbenchHistory: [],
+    appSettings: {
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      apiKey: 'old-key',
+      baseUrl: 'https://api.deepseek.com/v1',
+      proxyUrl: '',
+      aiProfiles: [],
+      activeAiProfileId: '',
+      imageProvider: '',
+      imageModel: '',
+      imageApiKey: '',
+      imageBaseUrl: '',
+      autoSaveInterval: '5m',
+      editorFont: 'clear-mono',
+      uiScale: 1,
+      darkMode: false,
+      darkModeStyle: 'standard'
+    }
+  }
+
+  const merged = mergeAppSettingsIntoWorkspaceSnapshot(snapshot, {
+    ...snapshot.appSettings,
+    provider: 'opencode-zen',
+    model: 'gpt-5.6-sol',
+    apiKey: 'new-key',
+    baseUrl: 'https://opencode.ai/zen/v1',
+    proxyUrl: 'http://127.0.0.1:7890'
+  }, {
+    theme: 'forest',
+    selectedProjectId: 'project-old'
+  })
+
+  assert.equal(merged.appSettings.provider, 'opencode-zen')
+  assert.equal(merged.appSettings.model, 'gpt-5.6-sol')
+  assert.equal(merged.appSettings.proxyUrl, 'http://127.0.0.1:7890')
+  assert.equal(merged.theme, 'forest')
+  assert.equal(merged.workspaces['project-old'], workspaceMarker)
+  assert.equal(snapshot.appSettings.model, 'deepseek-chat')
+})

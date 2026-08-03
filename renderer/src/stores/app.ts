@@ -2646,6 +2646,11 @@ export const useAppStore = defineStore('app', () => {
     return !persistenceError.value
   }
 
+  async function flushAppSettings(): Promise<boolean> {
+    await persistAppSettings()
+    return !persistenceError.value
+  }
+
   function switchAiProfile(profileId: string): void {
     const profile = appSettings.value.aiProfiles.find(p => p.id === profileId)
     if (!profile) return
@@ -3396,6 +3401,7 @@ export const useAppStore = defineStore('app', () => {
     theme,
     updateAppSetting,
     saveAppSettingsDraft,
+    flushAppSettings,
     switchAiProfile,
     updateActiveAiProfileModel,
     addAiProfile,

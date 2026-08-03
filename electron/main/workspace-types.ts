@@ -518,6 +518,21 @@ export function normalizeAppSettings(
   }
 }
 
+export function mergeAppSettingsIntoWorkspaceSnapshot(
+  snapshot: WorkspacePayload | null,
+  settings: Partial<WorkspacePayload['appSettings']>,
+  metadata: { theme: string; selectedProjectId: string }
+): WorkspacePayload | null {
+  if (!snapshot) return null
+
+  return {
+    ...snapshot,
+    theme: metadata.theme,
+    selectedProjectId: metadata.selectedProjectId,
+    appSettings: normalizeAppSettings(settings)
+  }
+}
+
 export function createFallbackVolume(title = '故事开端', volumeId = 'volume-legacy-default') {
   return {
     id: volumeId,

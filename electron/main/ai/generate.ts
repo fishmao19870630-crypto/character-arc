@@ -5,14 +5,15 @@ import { buildSystemPrompt, createModel, providerSupportsNativeStructuredOutput 
 import type { AiRunUsage, AppSettings, AiStreamHandlers, PromptPair } from './shared-types'
 import { stripReasoningMarkup } from './reasoning'
 import { isOpenAIReasoningChatModel, resolveProviderOptions } from './request-options'
+import { isAnthropicProtocol, isOpenAIChatProtocol } from '@shared/ai-provider-catalog'
 
 function useStreamFallback(settings: AppSettings): boolean {
-  return settings.provider === 'anthropic'
-    || (settings.provider === 'openai-compatible' && isOpenAIReasoningChatModel(settings))
+  return isAnthropicProtocol(settings.provider, settings.model)
+    || (isOpenAIChatProtocol(settings.provider, settings.model) && isOpenAIReasoningChatModel(settings))
 }
 
 function shouldRetryGenericUpstreamError(settings: AppSettings, error: unknown): boolean {
-  if (settings.provider !== 'openai-compatible' || !isOpenAIReasoningChatModel(settings)) {
+  if (!isOpenAIChatProtocol(settings.provider, settings.model) || !isOpenAIReasoningChatModel(settings)) {
     return false
   }
   return error instanceof Error && error.message.toLowerCase().includes('upstream request failed')
@@ -32,6 +33,7 @@ function resolveSamplingOptions(settings: AppSettings): { temperature?: number; 
 export type AiGenerateOptions = {
   schema?: ZodTypeAny
   disableReasoning?: boolean
+  forceNonStreaming?: boolean
 }
 
 export type AiTextGenerationResult = {
@@ -134,7 +136,7 @@ export async function aiGenerateTextWithUsage(
     }
   }
 
-  if (useStreamFallback(settings)) {
+  if (useStreamFallback(settings) && !options?.forceNonStreaming) {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         let streamError: unknown = null

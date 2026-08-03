@@ -2,12 +2,12 @@ import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
 import type { LanguageModel } from 'ai'
 import type { AppSettings } from './shared-types'
+import { isAnthropicProtocol, resolveAiProviderProtocol } from '@shared/ai-provider-catalog'
 import { extractReasoningText } from './reasoning'
 import { createProxyFetch } from './proxy-fetch'
 import {
-  fetchWithResponseStartTimeout,
-  readStreamChunkWithIdleTimeout,
-  splitCompleteSseEvents
+  createTerminalAwareSseStream,
+  fetchWithResponseStartTimeout
 } from './sse'
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 60_000
@@ -28,20 +28,15 @@ function isOfficialOpenAIProvider(settings: AppSettings): boolean {
 }
 
 function shouldUseOpenAIResponses(settings: AppSettings): boolean {
-  // A model name alone does not tell us whether an OpenAI-compatible relay
-  // implements the Responses API. Most relays expose Chat Completions only;
-  // routing long streaming requests through Responses can leave the SDK
-  // waiting forever even though the relay has already produced a response.
-  // Use Responses only when the user explicitly selected the official OpenAI
-  // provider, and keep compatible endpoints on the broadly supported chat API.
-  return isOfficialOpenAIProvider(settings)
+  // 普通中转站默认走 Chat Completions；只有明确声明的官方/Zen 模型走 Responses。
+  return resolveAiProviderProtocol(settings.provider, settings.model) === 'openai-responses'
 }
 
 export function providerSupportsNativeStructuredOutput(settings: AppSettings): boolean {
   // Anthropic's SDK object streaming can produce an empty text stream or fail
   // object parsing for otherwise recoverable JSON tasks. Keep Claude JSON tasks
   // on the text path and let task normalizers/repair prompts handle the JSON.
-  if (settings.provider === 'anthropic') return false
+  if (isAnthropicProtocol(settings.provider, settings.model)) return false
   return isOfficialOpenAIProvider(settings)
 }
 
@@ -75,87 +70,54 @@ export function createReasoningInterceptedFetch(
     const contentType = response.headers.get('content-type') || ''
     if (!contentType.includes('text/event-stream')) return response
 
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    const encoder = new TextEncoder()
-    let buffer = ''
-
-    const stream = new ReadableStream({
-      async pull(controller) {
-        try {
-          const { done, value } = await readStreamChunkWithIdleTimeout(reader, idleTimeoutMs)
-          if (done) {
-            if (buffer) {
-              controller.enqueue(encoder.encode(buffer))
-              buffer = ''
-            }
-            controller.close()
-            return
+    const stream = createTerminalAwareSseStream(
+      response.body,
+      idleTimeoutMs,
+      (event) => {
+        const lines = event.split(/\r?\n/)
+        const rebuilt: string[] = []
+        for (const line of lines) {
+          if (!line.startsWith('data:')) {
+            rebuilt.push(line)
+            continue
           }
-          buffer += decoder.decode(value, { stream: true })
-          // SSE 既可能使用 LF，也可能使用 HTTP 常见的 CRLF；两者都要实时切分。
-          // 只查找 `\n\n` 会让 CRLF 响应一直留在 buffer，直到上游结束才显示内容。
-          const split = splitCompleteSseEvents(buffer)
-          const events = split.events
-          buffer = split.remainder
-
-          let outChunk = ''
-          for (const event of events) {
-            const lines = event.split(/\r?\n/)
-            const rebuilt: string[] = []
-            for (const line of lines) {
-              if (!line.startsWith('data:')) {
-                rebuilt.push(line)
-                continue
-              }
-              const dataStr = line.slice(5).trim()
-              if (!dataStr || dataStr === '[DONE]') {
-                rebuilt.push(line)
-                continue
-              }
-              try {
-                const parsed = JSON.parse(dataStr)
-                const delta = parsed?.choices?.[0]?.delta
-                const message = parsed?.choices?.[0]?.message
-                const reasoningKeys = ['reasoning_content', 'reasoning', 'thinking', 'reasoning_details']
-                const sources = [delta, message].filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
-                if (sources.length > 0 && onReasoningDelta) {
-                  let extracted = ''
-                  let touched = false
-                  for (const source of sources) {
-                    for (const key of reasoningKeys) {
-                      if (source[key] !== undefined) {
-                        extracted += extractReasoningText(source[key])
-                        delete source[key]
-                        touched = true
-                      }
-                    }
-                  }
-                  if (extracted) onReasoningDelta(extracted)
-                  if (touched) {
-                    rebuilt.push(`data: ${JSON.stringify(parsed)}`)
-                    continue
+          const dataStr = line.slice(5).trim()
+          if (!dataStr || dataStr === '[DONE]') {
+            rebuilt.push(line)
+            continue
+          }
+          try {
+            const parsed = JSON.parse(dataStr)
+            const delta = parsed?.choices?.[0]?.delta
+            const message = parsed?.choices?.[0]?.message
+            const reasoningKeys = ['reasoning_content', 'reasoning', 'thinking', 'reasoning_details']
+            const sources = [delta, message].filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+            if (sources.length > 0 && onReasoningDelta) {
+              let extracted = ''
+              let touched = false
+              for (const source of sources) {
+                for (const key of reasoningKeys) {
+                  if (source[key] !== undefined) {
+                    extracted += extractReasoningText(source[key])
+                    delete source[key]
+                    touched = true
                   }
                 }
-              } catch {
-                // 解析失败，原样转发
               }
-              rebuilt.push(line)
+              if (extracted) onReasoningDelta(extracted)
+              if (touched) {
+                rebuilt.push(`data: ${JSON.stringify(parsed)}`)
+                continue
+              }
             }
-            outChunk += rebuilt.join('\n')
+          } catch {
+            // 解析失败，原样转发
           }
-          if (outChunk) {
-            controller.enqueue(encoder.encode(outChunk))
-          }
-        } catch (err) {
-          reader.cancel(err).catch(() => {})
-          controller.error(err)
+          rebuilt.push(line)
         }
-      },
-      cancel(reason) {
-        reader.cancel(reason).catch(() => {})
+        return rebuilt.join('\n')
       }
-    })
+    )
 
     return new Response(stream, {
       status: response.status,
@@ -178,21 +140,21 @@ function createOpenAICompatibleProvider(settings: AppSettings, customFetch?: typ
 
 export function createModel(settings: AppSettings, onReasoningDelta?: (delta: string) => void): LanguageModel {
   const requestFetch = createProxyFetch(settings.proxyUrl)
-  if (settings.provider === 'anthropic') {
-    const anthropic = createAnthropic({
-      apiKey: settings.apiKey,
-      baseURL: settings.baseUrl || undefined,
-      fetch: requestFetch
-    })
-    return anthropic(settings.model)
-  }
-
   const customFetch = createReasoningInterceptedFetch(
     onReasoningDelta,
     requestFetch,
     resolveStreamIdleTimeoutMs(settings),
     Math.min(DEFAULT_RESPONSE_START_TIMEOUT_MS, resolveStreamIdleTimeoutMs(settings))
   )
+  if (isAnthropicProtocol(settings.provider, settings.model)) {
+    const anthropic = createAnthropic({
+      apiKey: settings.apiKey,
+      baseURL: settings.baseUrl || undefined,
+      fetch: customFetch
+    })
+    return anthropic(settings.model)
+  }
+
   const openai = createOpenAICompatibleProvider(settings, customFetch)
   if (shouldUseOpenAIResponses(settings)) {
     return openai(settings.model)
@@ -202,7 +164,7 @@ export function createModel(settings: AppSettings, onReasoningDelta?: (delta: st
 }
 
 export function buildSystemPrompt(settings: AppSettings, systemPrompt: string) {
-  if (settings.provider !== 'anthropic') {
+  if (!isAnthropicProtocol(settings.provider, settings.model)) {
     return systemPrompt
   }
 

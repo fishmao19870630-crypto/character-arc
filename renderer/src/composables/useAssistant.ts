@@ -9,6 +9,7 @@
  */
 
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { useAppStore } from '@/stores/app'
 import type {
   AssistantEventPush,
   AssistantSession,
@@ -89,6 +90,7 @@ export interface AssistantSendOptions {
 
 export function useAssistant(options: UseAssistantOptions) {
   const A = window.characterArc.assistant
+  const appStore = useAppStore()
 
   // === 会话 ===
   const sessions = ref<AssistantSession[]>([])
@@ -520,6 +522,11 @@ export function useAssistant(options: UseAssistantOptions) {
       if (current && isDefaultTitle(current.title)) {
         void renameSession(sessionId, deriveSessionTitle(trimmedText))
       }
+    }
+
+    if (!await appStore.flushAppSettings()) {
+      lastError.value = appStore.persistenceError ?? 'AI 设置保存失败，未发送本次请求。'
+      return
     }
 
     if (composerValue.value.trim() === trimmedText) {
