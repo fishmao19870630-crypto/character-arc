@@ -4,9 +4,14 @@ import type { LanguageModel } from 'ai'
 import type { AppSettings } from './shared-types'
 import { extractReasoningText } from './reasoning'
 import { createProxyFetch } from './proxy-fetch'
-import { readStreamChunkWithIdleTimeout, splitCompleteSseEvents } from './sse'
+import {
+  fetchWithResponseStartTimeout,
+  readStreamChunkWithIdleTimeout,
+  splitCompleteSseEvents
+} from './sse'
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 60_000
+const DEFAULT_RESPONSE_START_TIMEOUT_MS = 30_000
 
 function resolveStreamIdleTimeoutMs(settings: AppSettings): number {
   const configuredMs = (settings.aiTimeoutSeconds ?? 180) * 1000
@@ -55,10 +60,16 @@ function isOllamaProvider(settings: AppSettings): boolean {
 export function createReasoningInterceptedFetch(
   onReasoningDelta?: (delta: string) => void,
   requestFetch: typeof fetch = globalThis.fetch,
-  idleTimeoutMs = DEFAULT_STREAM_IDLE_TIMEOUT_MS
+  idleTimeoutMs = DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  responseStartTimeoutMs = DEFAULT_RESPONSE_START_TIMEOUT_MS
 ): typeof fetch {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const response = await requestFetch(input as RequestInfo, init)
+    const response = await fetchWithResponseStartTimeout(
+      requestFetch,
+      input,
+      init,
+      responseStartTimeoutMs
+    )
     if (!response.ok || !response.body) return response
 
     const contentType = response.headers.get('content-type') || ''
@@ -179,7 +190,8 @@ export function createModel(settings: AppSettings, onReasoningDelta?: (delta: st
   const customFetch = createReasoningInterceptedFetch(
     onReasoningDelta,
     requestFetch,
-    resolveStreamIdleTimeoutMs(settings)
+    resolveStreamIdleTimeoutMs(settings),
+    Math.min(DEFAULT_RESPONSE_START_TIMEOUT_MS, resolveStreamIdleTimeoutMs(settings))
   )
   const openai = createOpenAICompatibleProvider(settings, customFetch)
   if (shouldUseOpenAIResponses(settings)) {

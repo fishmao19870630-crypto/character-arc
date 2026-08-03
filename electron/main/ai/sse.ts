@@ -16,8 +16,10 @@ export function splitCompleteSseEvents(buffer: string): {
 }
 
 export class AiStreamIdleTimeoutError extends Error {
-  constructor(timeoutMs: number) {
-    super(`AI 流式响应已连续 ${Math.round(timeoutMs / 1000)} 秒没有新数据。`)
+  constructor(timeoutMs: number, phase: 'response-start' | 'stream-idle' = 'stream-idle') {
+    super(phase === 'response-start'
+      ? `AI 请求等待响应超过 ${Math.round(timeoutMs / 1000)} 秒，请检查网络、代理或接口限流状态。`
+      : `AI 流式响应已连续 ${Math.round(timeoutMs / 1000)} 秒没有新数据。`)
     this.name = 'AiStreamIdleTimeoutError'
   }
 }
@@ -49,4 +51,33 @@ export function readStreamChunkWithIdleTimeout(
       }
     )
   })
+}
+
+export async function fetchWithResponseStartTimeout(
+  requestFetch: typeof fetch,
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  timeoutMs: number
+): Promise<Response> {
+  const timeoutController = new AbortController()
+  const externalSignal = init?.signal ?? undefined
+  const signal = externalSignal
+    ? AbortSignal.any([externalSignal, timeoutController.signal])
+    : timeoutController.signal
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      timeoutController.abort()
+      reject(new AiStreamIdleTimeoutError(timeoutMs, 'response-start'))
+    }, timeoutMs)
+  })
+
+  try {
+    return await Promise.race([
+      requestFetch(input, { ...init, signal }),
+      timeoutPromise
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }

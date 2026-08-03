@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  fetchWithResponseStartTimeout,
   isAiStreamIdleTimeoutError,
   readStreamChunkWithIdleTimeout,
   splitCompleteSseEvents
@@ -36,4 +37,13 @@ test('SSE 长时间没有新数据时返回可识别的空闲超时', async () =
     (error) => isAiStreamIdleTimeoutError(error)
   )
   await reader.cancel()
+})
+
+test('等待响应头超时不会永久卡在请求阶段', async () => {
+  const neverResponds = () => new Promise(() => {})
+
+  await assert.rejects(
+    fetchWithResponseStartTimeout(neverResponds, 'https://example.test', undefined, 10),
+    (error) => isAiStreamIdleTimeoutError(error) && /等待响应/.test(error.message)
+  )
 })
