@@ -93,7 +93,8 @@ export function normalizeSettings(settings: AppSettings): AppSettings {
     embeddingModel: settings.embeddingModel?.trim() || '',
     imageModel: settings.imageModel?.trim() || '',
     imageApiKey: settings.imageApiKey?.trim() || '',
-    imageBaseUrl: settings.imageBaseUrl?.trim() || ''
+    imageBaseUrl: settings.imageBaseUrl?.trim() || '',
+    aiTimeoutSeconds: normalizeOptionalNumber(settings.aiTimeoutSeconds, 30, 600) ?? 180
   }
 }
 

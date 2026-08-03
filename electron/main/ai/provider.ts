@@ -4,7 +4,14 @@ import type { LanguageModel } from 'ai'
 import type { AppSettings } from './shared-types'
 import { extractReasoningText } from './reasoning'
 import { createProxyFetch } from './proxy-fetch'
-import { splitCompleteSseEvents } from './sse'
+import { readStreamChunkWithIdleTimeout, splitCompleteSseEvents } from './sse'
+
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 60_000
+
+function resolveStreamIdleTimeoutMs(settings: AppSettings): number {
+  const configuredMs = (settings.aiTimeoutSeconds ?? 180) * 1000
+  return Math.min(DEFAULT_STREAM_IDLE_TIMEOUT_MS, Math.max(30_000, configuredMs))
+}
 
 const ANTHROPIC_PROMPT_CACHE = {
   type: 'ephemeral' as const,
@@ -47,11 +54,12 @@ function isOllamaProvider(settings: AppSettings): boolean {
  */
 export function createReasoningInterceptedFetch(
   onReasoningDelta?: (delta: string) => void,
-  requestFetch: typeof fetch = globalThis.fetch
+  requestFetch: typeof fetch = globalThis.fetch,
+  idleTimeoutMs = DEFAULT_STREAM_IDLE_TIMEOUT_MS
 ): typeof fetch {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const response = await requestFetch(input as RequestInfo, init)
-    if (!response.ok || !response.body || !onReasoningDelta) return response
+    if (!response.ok || !response.body) return response
 
     const contentType = response.headers.get('content-type') || ''
     if (!contentType.includes('text/event-stream')) return response
@@ -64,7 +72,7 @@ export function createReasoningInterceptedFetch(
     const stream = new ReadableStream({
       async pull(controller) {
         try {
-          const { done, value } = await reader.read()
+          const { done, value } = await readStreamChunkWithIdleTimeout(reader, idleTimeoutMs)
           if (done) {
             if (buffer) {
               controller.enqueue(encoder.encode(buffer))
@@ -100,7 +108,7 @@ export function createReasoningInterceptedFetch(
                 const message = parsed?.choices?.[0]?.message
                 const reasoningKeys = ['reasoning_content', 'reasoning', 'thinking', 'reasoning_details']
                 const sources = [delta, message].filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
-                if (sources.length > 0) {
+                if (sources.length > 0 && onReasoningDelta) {
                   let extracted = ''
                   let touched = false
                   for (const source of sources) {
@@ -129,6 +137,7 @@ export function createReasoningInterceptedFetch(
             controller.enqueue(encoder.encode(outChunk))
           }
         } catch (err) {
+          reader.cancel(err).catch(() => {})
           controller.error(err)
         }
       },
@@ -167,9 +176,11 @@ export function createModel(settings: AppSettings, onReasoningDelta?: (delta: st
     return anthropic(settings.model)
   }
 
-  const customFetch = onReasoningDelta
-    ? createReasoningInterceptedFetch(onReasoningDelta, requestFetch)
-    : requestFetch
+  const customFetch = createReasoningInterceptedFetch(
+    onReasoningDelta,
+    requestFetch,
+    resolveStreamIdleTimeoutMs(settings)
+  )
   const openai = createOpenAICompatibleProvider(settings, customFetch)
   if (shouldUseOpenAIResponses(settings)) {
     return openai(settings.model)
