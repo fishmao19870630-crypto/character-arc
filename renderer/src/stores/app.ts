@@ -242,6 +242,7 @@ export const useAppStore = defineStore('app', () => {
     scheduleWorkspaceSync,
     flushWorkspaceSync,
     persistWorkspace,
+    persistAppSettings,
     schedulePersist,
     scheduleSettingsPersist,
     handleRemoteWorkspaceSync
@@ -932,7 +933,7 @@ export const useAppStore = defineStore('app', () => {
   /** 切换主题并触发快速持久化 */
   function setTheme(nextTheme: ThemeName): void {
     theme.value = nextTheme
-    schedulePersist('fast')
+    scheduleSettingsPersist({ flushWorkspace: false })
   }
 
   /** 进入章节写作页面 */
@@ -2638,6 +2639,13 @@ export const useAppStore = defineStore('app', () => {
     scheduleSettingsPersist(options)
   }
 
+  async function saveAppSettingsDraft(nextSettings: AppSettings, nextTheme: ThemeName = theme.value): Promise<boolean> {
+    theme.value = nextTheme
+    appSettings.value = normalizeAppSettings(nextSettings)
+    await persistAppSettings()
+    return !persistenceError.value
+  }
+
   function switchAiProfile(profileId: string): void {
     const profile = appSettings.value.aiProfiles.find(p => p.id === profileId)
     if (!profile) return
@@ -3387,6 +3395,7 @@ export const useAppStore = defineStore('app', () => {
     setTheme,
     theme,
     updateAppSetting,
+    saveAppSettingsDraft,
     switchAiProfile,
     updateActiveAiProfileModel,
     addAiProfile,

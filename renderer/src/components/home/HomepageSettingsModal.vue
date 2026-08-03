@@ -370,39 +370,22 @@ async function handleTestAiConnection(): Promise<void> {
 }
 
 async function saveSettings(): Promise<void> {
-  appStore.updateAppSetting('aiProfiles', draftSettings.aiProfiles.map((profile) => ({ ...profile })))
-  appStore.updateAppSetting('activeAiProfileId', draftSettings.activeAiProfileId)
-
   const activeProfile = draftSettings.aiProfiles.find(p => p.id === draftSettings.activeAiProfileId)
-  if (activeProfile) {
-    appStore.updateAppSetting('provider', activeProfile.provider)
-    appStore.updateAppSetting('model', activeProfile.model)
-    appStore.updateAppSetting('apiKey', activeProfile.apiKey)
-    appStore.updateAppSetting('baseUrl', activeProfile.baseUrl)
-    appStore.updateAppSetting('temperature', activeProfile.temperature)
-    appStore.updateAppSetting('topP', activeProfile.topP)
+  const nextSettings: AppSettings = {
+    ...draftSettings,
+    aiProfiles: draftSettings.aiProfiles.map((profile) => ({ ...profile })),
+    activeAiProfileId: draftSettings.activeAiProfileId,
+    provider: activeProfile?.provider ?? draftSettings.provider,
+    model: activeProfile?.model ?? draftSettings.model,
+    apiKey: activeProfile?.apiKey ?? draftSettings.apiKey,
+    baseUrl: activeProfile?.baseUrl ?? draftSettings.baseUrl,
+    temperature: activeProfile?.temperature ?? draftSettings.temperature,
+    topP: activeProfile?.topP ?? draftSettings.topP
   }
 
-  appStore.updateAppSetting('proxyUrl', draftSettings.proxyUrl)
-
-  appStore.updateAppSetting('imageProvider', draftSettings.imageProvider)
-  appStore.updateAppSetting('imageModel', draftSettings.imageModel)
-  appStore.updateAppSetting('imageApiKey', draftSettings.imageApiKey)
-  appStore.updateAppSetting('imageBaseUrl', draftSettings.imageBaseUrl)
-  appStore.updateAppSetting('autoSaveInterval', draftSettings.autoSaveInterval)
-  appStore.updateAppSetting('editorFont', draftSettings.editorFont)
-  appStore.updateAppSetting('uiScale', draftSettings.uiScale)
-  appStore.updateAppSetting('darkMode', draftSettings.darkMode)
-  appStore.updateAppSetting('darkModeStyle', draftSettings.darkModeStyle)
-  appStore.updateAppSetting('aiTimeoutSeconds', draftSettings.aiTimeoutSeconds)
-
-  if (draftTheme.value !== appStore.theme) {
-    appStore.setTheme(draftTheme.value)
-  }
-
-  await appStore.persistWorkspace()
-  if (appStore.persistenceError) {
-    message.error(appStore.persistenceError)
+  const saved = await appStore.saveAppSettingsDraft(nextSettings, draftTheme.value)
+  if (!saved) {
+    message.error(appStore.persistenceError ?? '设置保存失败')
     return
   }
 
