@@ -2654,14 +2654,14 @@ export const useAppStore = defineStore('app', () => {
     appSettings.value.baseUrl = profile.baseUrl
     appSettings.value.temperature = profile.temperature
     appSettings.value.topP = profile.topP
-    scheduleSettingsPersist()
+    scheduleSettingsPersist({ flushWorkspace: false })
   }
 
   function updateActiveAiProfileModel(model: string): void {
     appSettings.value.model = model
     const profile = appSettings.value.aiProfiles.find(p => p.id === appSettings.value.activeAiProfileId)
     if (profile) profile.model = model
-    scheduleSettingsPersist()
+    scheduleSettingsPersist({ flushWorkspace: false })
   }
 
   function addAiProfile(profile: import('@/types/app').AiProfile): void {

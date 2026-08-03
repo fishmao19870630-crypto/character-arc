@@ -413,6 +413,11 @@ declare global {
         result?: unknown
         error?: string
       }>
+      testProxyConnection: (proxyUrl: string) => Promise<{
+        success: boolean
+        result?: { ip: string }
+        error?: string
+      }>
       fetchModels: (settings: unknown) => Promise<{
         success: boolean
         result?: Array<{ id: string; ownedBy: string | null }>

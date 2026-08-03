@@ -3,6 +3,7 @@ import { buildSystemPrompt, createModel } from '../provider'
 import type { AiRunUsage, AppSettings, AiAgentStreamHandlers, ToolCallTrace } from '../shared-types'
 import type { Tool, ToolContext } from './tools/types'
 import { stripReasoningMarkup } from '../reasoning'
+import { isAiStreamIdleTimeoutError } from '../sse'
 
 export type RunAgentParams = {
   settings: AppSettings
@@ -87,16 +88,20 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
 
   params.handlers.onAgentStatus('正在思考...', 1, maxSteps)
 
-  // streamText 默认不抛流错误，仅通过 onError 暴露；捕获后在消费流时重抛，确保错误能上报到 UI。
-  let streamError: unknown = null
-  const result = streamText({
-    model: createModel(params.settings, params.handlers.onReasoningDelta),
+  let fullText = ''
+  let firstAttemptReasoning = ''
+
+  const startStream = (
+    onReasoningDelta: (delta: string) => void,
+    captureError: (error: unknown) => void
+  ) => streamText({
+    model: createModel(params.settings, onReasoningDelta),
     system: buildSystemPrompt(params.settings, params.systemPrompt),
     prompt: params.userPrompt,
     ...(params.disableTools ? {} : { tools: sdkTools, stopWhen: stepCountIs(maxSteps) }),
     maxOutputTokens: params.maxTokens,
     abortSignal: params.ctx.signal,
-    onError: ({ error }) => { streamError = error },
+    onError: ({ error }) => captureError(error),
     experimental_onToolCallStart: ({ toolCall }) => {
       const id = toolCall.toolCallId
       toolStartTimes.set(id, Date.now())
@@ -127,37 +132,60 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
     }
   })
 
-  let fullText = ''
-  if (params.disableTools) {
-    // 推理模型（如 mimo、deepseek-r1）会先输出 reasoning，再输出正文。
-    // 走 fullStream 才能拿到 reasoning-delta，让思考过程实时可见，否则首字前界面长时间无反馈。
-    for await (const part of result.fullStream) {
-      if (part.type === 'reasoning-delta') {
-        params.handlers.onReasoningDelta?.(part.text)
-      } else if (part.type === 'text-delta') {
-        fullText += part.text
-        params.handlers.onTextDelta(part.text)
-      } else if (part.type === 'error') {
-        // fullStream 把流式错误作为 error part 发出而不抛异常，必须显式抛出，
-        // 否则错误会被静默吞掉、上层无法感知（如中转站 503「No available accounts」）。
-        throw part.error
+  let result: ReturnType<typeof startStream> | null = null
+
+  // 免费 API 偶尔会在 reasoning 阶段留下半开 SSE。连续无数据时仅在尚未产生
+  // 正文或工具调用的前提下重试一次，避免重复执行工具或拼接两份正文。
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let streamError: unknown = null
+    let retryReasoningLength = 0
+    const onReasoningDelta = (delta: string): void => {
+      if (attempt === 0) {
+        firstAttemptReasoning += delta
+        params.handlers.onReasoningDelta?.(delta)
+        return
+      }
+
+      const previousLength = retryReasoningLength
+      retryReasoningLength += delta.length
+      const visibleStart = Math.max(previousLength, firstAttemptReasoning.length)
+      if (retryReasoningLength > visibleStart) {
+        params.handlers.onReasoningDelta?.(delta.slice(visibleStart - previousLength))
       }
     }
-  } else {
-    for await (const part of result.fullStream) {
-      if (part.type === 'reasoning-delta') {
-        params.handlers.onReasoningDelta?.(part.text)
-      } else if (part.type === 'text-delta') {
-        fullText += part.text
-        params.handlers.onTextDelta(part.text)
-      } else if (part.type === 'error') {
-        throw part.error
+
+    const currentResult = startStream(onReasoningDelta, (error) => { streamError = error })
+
+    try {
+      // fullStream 同时承载推理、正文、工具与错误，避免 reasoning 阶段界面无反馈。
+      for await (const part of currentResult.fullStream) {
+        if (part.type === 'reasoning-delta') {
+          onReasoningDelta(part.text)
+        } else if (part.type === 'text-delta') {
+          fullText += part.text
+          params.handlers.onTextDelta(part.text)
+        } else if (part.type === 'error') {
+          throw part.error
+        }
       }
+      if (streamError) throw streamError
+      result = currentResult
+      break
+    } catch (error) {
+      const canRetry = attempt === 0
+        && isAiStreamIdleTimeoutError(error)
+        && !params.ctx.signal.aborted
+        && !fullText
+        && toolCalls.length === 0
+        && toolStartTimes.size === 0
+      if (!canRetry) throw error
+      params.handlers.onAgentStatus('流式连接中断，正在自动重试...', 1, maxSteps)
     }
   }
 
-  // 兜底：若错误未以 error part 形式出现而是走了 onError，这里重抛。
-  if (streamError) throw streamError
+  if (!result) {
+    throw new Error('AI 流式请求重试后仍未返回结果。')
+  }
 
   // 流式正文兜底（两个分支共用）：
   //   - 推理模型可能把内容塞进 reasoning/thinking blocks，textStream 拿不到

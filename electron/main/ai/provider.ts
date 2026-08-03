@@ -3,6 +3,20 @@ import { createOpenAI } from '@ai-sdk/openai'
 import type { LanguageModel } from 'ai'
 import type { AppSettings } from './shared-types'
 import { extractReasoningText } from './reasoning'
+import { createProxyFetch } from './proxy-fetch'
+import {
+  fetchWithResponseStartTimeout,
+  readStreamChunkWithIdleTimeout,
+  splitCompleteSseEvents
+} from './sse'
+
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 60_000
+const DEFAULT_RESPONSE_START_TIMEOUT_MS = 30_000
+
+function resolveStreamIdleTimeoutMs(settings: AppSettings): number {
+  const configuredMs = (settings.aiTimeoutSeconds ?? 180) * 1000
+  return Math.min(DEFAULT_STREAM_IDLE_TIMEOUT_MS, Math.max(30_000, configuredMs))
+}
 
 const ANTHROPIC_PROMPT_CACHE = {
   type: 'ephemeral' as const,
@@ -44,11 +58,19 @@ function isOllamaProvider(settings: AppSettings): boolean {
  * 同时从 chunk 中移除该字段（避免后续解析时有歧义），让正文 content 保持原状。
  */
 export function createReasoningInterceptedFetch(
-  onReasoningDelta?: (delta: string) => void
+  onReasoningDelta?: (delta: string) => void,
+  requestFetch: typeof fetch = globalThis.fetch,
+  idleTimeoutMs = DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  responseStartTimeoutMs = DEFAULT_RESPONSE_START_TIMEOUT_MS
 ): typeof fetch {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const response = await fetch(input as RequestInfo, init)
-    if (!response.ok || !response.body || !onReasoningDelta) return response
+    const response = await fetchWithResponseStartTimeout(
+      requestFetch,
+      input,
+      init,
+      responseStartTimeoutMs
+    )
+    if (!response.ok || !response.body) return response
 
     const contentType = response.headers.get('content-type') || ''
     if (!contentType.includes('text/event-stream')) return response
@@ -61,7 +83,7 @@ export function createReasoningInterceptedFetch(
     const stream = new ReadableStream({
       async pull(controller) {
         try {
-          const { done, value } = await reader.read()
+          const { done, value } = await readStreamChunkWithIdleTimeout(reader, idleTimeoutMs)
           if (done) {
             if (buffer) {
               controller.enqueue(encoder.encode(buffer))
@@ -71,17 +93,15 @@ export function createReasoningInterceptedFetch(
             return
           }
           buffer += decoder.decode(value, { stream: true })
-          // 按 SSE 事件边界（双换行）切分，把不完整事件留在 buffer 里下一轮处理
-          const events: string[] = []
-          let idx: number
-          while ((idx = buffer.indexOf('\n\n')) !== -1) {
-            events.push(buffer.slice(0, idx + 2))
-            buffer = buffer.slice(idx + 2)
-          }
+          // SSE 既可能使用 LF，也可能使用 HTTP 常见的 CRLF；两者都要实时切分。
+          // 只查找 `\n\n` 会让 CRLF 响应一直留在 buffer，直到上游结束才显示内容。
+          const split = splitCompleteSseEvents(buffer)
+          const events = split.events
+          buffer = split.remainder
 
           let outChunk = ''
           for (const event of events) {
-            const lines = event.split('\n')
+            const lines = event.split(/\r?\n/)
             const rebuilt: string[] = []
             for (const line of lines) {
               if (!line.startsWith('data:')) {
@@ -99,7 +119,7 @@ export function createReasoningInterceptedFetch(
                 const message = parsed?.choices?.[0]?.message
                 const reasoningKeys = ['reasoning_content', 'reasoning', 'thinking', 'reasoning_details']
                 const sources = [delta, message].filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
-                if (sources.length > 0) {
+                if (sources.length > 0 && onReasoningDelta) {
                   let extracted = ''
                   let touched = false
                   for (const source of sources) {
@@ -128,6 +148,7 @@ export function createReasoningInterceptedFetch(
             controller.enqueue(encoder.encode(outChunk))
           }
         } catch (err) {
+          reader.cancel(err).catch(() => {})
           controller.error(err)
         }
       },
@@ -156,15 +177,22 @@ function createOpenAICompatibleProvider(settings: AppSettings, customFetch?: typ
 }
 
 export function createModel(settings: AppSettings, onReasoningDelta?: (delta: string) => void): LanguageModel {
+  const requestFetch = createProxyFetch(settings.proxyUrl)
   if (settings.provider === 'anthropic') {
     const anthropic = createAnthropic({
       apiKey: settings.apiKey,
-      baseURL: settings.baseUrl || undefined
+      baseURL: settings.baseUrl || undefined,
+      fetch: requestFetch
     })
     return anthropic(settings.model)
   }
 
-  const customFetch = onReasoningDelta ? createReasoningInterceptedFetch(onReasoningDelta) : undefined
+  const customFetch = createReasoningInterceptedFetch(
+    onReasoningDelta,
+    requestFetch,
+    resolveStreamIdleTimeoutMs(settings),
+    Math.min(DEFAULT_RESPONSE_START_TIMEOUT_MS, resolveStreamIdleTimeoutMs(settings))
+  )
   const openai = createOpenAICompatibleProvider(settings, customFetch)
   if (shouldUseOpenAIResponses(settings)) {
     return openai(settings.model)

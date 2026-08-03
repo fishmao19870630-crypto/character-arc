@@ -22,6 +22,7 @@ export interface PerformAiRequestOptions {
   providerLabel: string
   externalSignal?: AbortSignal
   timeoutMs?: number
+  requestFetch?: typeof fetch
 }
 
 async function performAiRequest(
@@ -35,6 +36,7 @@ async function performAiRequest(
   let label: string
   let signal: AbortSignal | undefined
   let timeoutMs: number
+  let requestFetch: typeof fetch
 
   if (typeof urlOrOpts === 'object') {
     url = urlOrOpts.url
@@ -42,12 +44,14 @@ async function performAiRequest(
     label = urlOrOpts.providerLabel
     signal = urlOrOpts.externalSignal
     timeoutMs = urlOrOpts.timeoutMs ?? AI_REQUEST_TIMEOUT_MS
+    requestFetch = urlOrOpts.requestFetch ?? globalThis.fetch
   } else {
     url = urlOrOpts
     reqInit = init!
     label = providerLabel!
     signal = externalSignal
     timeoutMs = AI_REQUEST_TIMEOUT_MS
+    requestFetch = globalThis.fetch
   }
 
   const timeoutCtl = new AbortController()
@@ -56,7 +60,7 @@ async function performAiRequest(
     ? AbortSignal.any([signal, timeoutCtl.signal])
     : timeoutCtl.signal
   try {
-    const response = await fetch(url, { ...reqInit, signal: combinedSignal })
+    const response = await requestFetch(url, { ...reqInit, signal: combinedSignal })
     if (!response.ok) {
       throw new Error(await readErrorMessage(response, label))
     }

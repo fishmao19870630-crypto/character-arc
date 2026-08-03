@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { Copy, Cpu, Download, Image, MonitorCog, Moon, Palette, PlugZap, Plus, RefreshCw, Trash2 } from 'lucide-vue-next'
+import { Copy, Cpu, Download, Image, MonitorCog, Moon, Network, Palette, PlugZap, Plus, RefreshCw, Trash2 } from 'lucide-vue-next'
 import { NButton, NFormItem, NInput, NInputNumber, NModal, NSelect, NSwitch, useMessage } from 'naive-ui'
 import { autoSaveOptions } from '@/features/settings/autoSave'
 import { getProviderPreset, providerOptions, resolveProviderDefaults } from '@/features/settings/providerPresets'
@@ -21,6 +21,8 @@ const emit = defineEmits<{
 const appStore = useAppStore()
 const message = useMessage()
 const isTestingAiConnection = ref(false)
+const isTestingProxyConnection = ref(false)
+const proxyTestIp = ref('')
 const isFetchingModels = ref(false)
 const fetchedModels = ref<Array<{ id: string; ownedBy: string | null }>>([])
 const isFetchingImageModels = ref(false)
@@ -49,6 +51,7 @@ const draftSettings = reactive<AppSettings>({
   model: '',
   apiKey: '',
   baseUrl: '',
+  proxyUrl: '',
   temperature: undefined,
   topP: undefined,
   aiProfiles: [],
@@ -78,6 +81,7 @@ const scrollContainer = ref<HTMLElement | null>(null)
 const activeNav = ref('sec-ai')
 const navItems = [
   { id: 'sec-ai', label: 'AI 接口配置', icon: Cpu },
+  { id: 'sec-network', label: '网络代理', icon: Network },
   { id: 'sec-image', label: '图片生成配置', icon: Image },
   { id: 'sec-theme', label: '界面主题', icon: Palette },
   { id: 'sec-prefs', label: '应用偏好', icon: MonitorCog }
@@ -117,6 +121,7 @@ const hasPendingChanges = computed(() =>
   || draftSettings.imageModel !== appStore.appSettings.imageModel
   || draftSettings.imageApiKey !== appStore.appSettings.imageApiKey
   || draftSettings.imageBaseUrl !== appStore.appSettings.imageBaseUrl
+  || draftSettings.proxyUrl !== appStore.appSettings.proxyUrl
   || draftSettings.autoSaveInterval !== appStore.appSettings.autoSaveInterval
   || draftSettings.editorFont !== appStore.appSettings.editorFont
   || draftSettings.uiScale !== appStore.appSettings.uiScale
@@ -130,6 +135,8 @@ function syncDraftFromStore(): void {
   draftSettings.model = appStore.appSettings.model
   draftSettings.apiKey = appStore.appSettings.apiKey
   draftSettings.baseUrl = appStore.appSettings.baseUrl
+  draftSettings.proxyUrl = appStore.appSettings.proxyUrl
+  proxyTestIp.value = ''
   draftSettings.temperature = appStore.appSettings.temperature
   draftSettings.topP = appStore.appSettings.topP
   draftSettings.aiProfiles = appStore.appSettings.aiProfiles.map((profile) => ({ ...profile }))
@@ -145,6 +152,29 @@ function syncDraftFromStore(): void {
   draftSettings.darkModeStyle = appStore.appSettings.darkModeStyle
   draftSettings.aiTimeoutSeconds = appStore.appSettings.aiTimeoutSeconds
   draftTheme.value = appStore.theme
+}
+
+function handleProxyUrlChange(value: string): void {
+  draftSettings.proxyUrl = value
+  proxyTestIp.value = ''
+}
+
+async function handleTestProxyConnection(): Promise<void> {
+  if (isTestingProxyConnection.value || !draftSettings.proxyUrl.trim()) return
+  isTestingProxyConnection.value = true
+  proxyTestIp.value = ''
+  try {
+    const result = await window.characterArc.testProxyConnection(draftSettings.proxyUrl)
+    if (!result.success || !result.result?.ip) {
+      throw new Error(result.error ?? '代理连接测试失败')
+    }
+    proxyTestIp.value = result.result.ip
+    message.success(`代理连接成功，当前出口 IP：${result.result.ip}`)
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '代理连接测试失败')
+  } finally {
+    isTestingProxyConnection.value = false
+  }
 }
 
 watch(
@@ -353,6 +383,8 @@ async function saveSettings(): Promise<void> {
     appStore.updateAppSetting('topP', activeProfile.topP)
   }
 
+  appStore.updateAppSetting('proxyUrl', draftSettings.proxyUrl)
+
   appStore.updateAppSetting('imageProvider', draftSettings.imageProvider)
   appStore.updateAppSetting('imageModel', draftSettings.imageModel)
   appStore.updateAppSetting('imageApiKey', draftSettings.imageApiKey)
@@ -556,6 +588,44 @@ async function saveSettings(): Promise<void> {
               </n-button>
             </div>
           </template>
+        </section>
+
+        <section id="sec-network" class="settings-section">
+          <div class="section-title">
+            <Network :size="18" />
+            <div>
+              <strong>网络代理</strong>
+              <p>让模型、Embedding 与图片请求通过本地代理服务访问。</p>
+            </div>
+          </div>
+          <n-form-item label="HTTP 代理地址">
+            <div class="preset-field">
+              <n-input
+                :value="draftSettings.proxyUrl"
+                placeholder="例如：http://127.0.0.1:7890（留空直连）"
+                clearable
+                @update:value="handleProxyUrlChange"
+              />
+              <span class="preset-hint">Clash 请填写 HTTP 或 Mixed 端口；可省略 http://。</span>
+            </div>
+          </n-form-item>
+          <div class="proxy-test-row">
+            <n-button
+              strong
+              secondary
+              :disabled="!draftSettings.proxyUrl.trim() || isTestingProxyConnection"
+              @click="handleTestProxyConnection"
+            >
+              <template #icon>
+                <PlugZap :size="16" />
+              </template>
+              {{ isTestingProxyConnection ? '测试中...' : '测试代理连接' }}
+            </n-button>
+            <div v-if="proxyTestIp" class="proxy-ip-result">
+              <span>当前出口 IP</span>
+              <code>{{ proxyTestIp }}</code>
+            </div>
+          </div>
         </section>
 
         <section id="sec-image" class="settings-section">
@@ -1052,6 +1122,29 @@ async function saveSettings(): Promise<void> {
   color: var(--arc-text-hint);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.proxy-test-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 34px;
+}
+
+.proxy-ip-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--arc-text-hint);
+  font-size: 12px;
+}
+
+.proxy-ip-result code {
+  color: var(--arc-primary);
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .spin-icon {
