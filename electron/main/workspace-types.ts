@@ -312,6 +312,7 @@ export type WorkspacePayload = {
     model: string
     apiKey: string
     baseUrl: string
+    proxyUrl: string
     temperature?: number
     topP?: number
     aiProfiles: Array<{
@@ -473,6 +474,7 @@ export function normalizeAppSettings(
     model: settings?.model || '',
     apiKey: settings?.apiKey || '',
     baseUrl: settings?.baseUrl || '',
+    proxyUrl: settings?.proxyUrl || '',
     temperature,
     topP,
     aiProfiles: Array.isArray(settings?.aiProfiles)

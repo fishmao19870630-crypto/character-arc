@@ -87,6 +87,7 @@ export function normalizeSettings(settings: AppSettings): AppSettings {
     model: settings.model?.trim() || defaults.model,
     apiKey: settings.apiKey?.trim() || '',
     baseUrl,
+    proxyUrl: settings.proxyUrl?.trim() || '',
     temperature: normalizeOptionalNumber(settings.temperature, 0, 2),
     topP: normalizeOptionalNumber(settings.topP, 0, 1),
     embeddingModel: settings.embeddingModel?.trim() || '',

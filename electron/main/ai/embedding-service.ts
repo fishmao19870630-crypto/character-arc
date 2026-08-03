@@ -1,6 +1,7 @@
 import type { AppSettings } from './shared-types'
 import { normalizeSettings } from './settings'
 import { ensureWorkspaceDb } from '../workspace-store'
+import { createProxyFetch } from './proxy-fetch'
 
 /** 每次向 Embedding API 发送的最大文本条数 */
 const MAX_BATCH_SIZE = 16
@@ -117,7 +118,7 @@ export async function embedTexts(
   for (let i = 0; i < texts.length; i += MAX_BATCH_SIZE) {
     const batch = texts.slice(i, i + MAX_BATCH_SIZE)
     signal?.throwIfAborted()
-    const batchResults = await requestEmbeddings(baseUrl, apiKey, batch, embeddingModel, signal)
+    const batchResults = await requestEmbeddings(baseUrl, apiKey, batch, embeddingModel, normalized.proxyUrl, signal)
     if (batchResults.length) {
       const dim = batchResults[0].length
       const existing = observedDimensions.get(dimKey)
@@ -159,6 +160,7 @@ async function requestEmbeddings(
   apiKey: string,
   inputs: string[],
   embeddingModel: string,
+  proxyUrl?: string,
   signal?: AbortSignal
 ): Promise<Float32Array[]> {
   const url = `${baseUrl}/embeddings`
@@ -171,7 +173,7 @@ async function requestEmbeddings(
 
   let response: Response
   try {
-    response = await fetch(url, {
+    response = await createProxyFetch(proxyUrl)(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

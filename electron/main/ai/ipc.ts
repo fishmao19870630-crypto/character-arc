@@ -16,6 +16,7 @@ import { ensureWorkspaceDb } from '../workspace-store'
 import { runSpiralBootstrap } from './spiral'
 import type { SpiralBootstrapInput } from './spiral'
 import { formatAiErrorMessage } from './error-message'
+import { testProxyConnection } from './proxy-fetch'
 
 /**
  * AI IPC 模块的外部依赖注入接口。
@@ -395,6 +396,15 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
       return { success: true, result }
     } catch (error) {
       return { success: false, error: formatAiErrorMessage(error, 'AI 连接测试失败') }
+    }
+  })
+
+  ipcMain.handle('characterarc:ai-test-proxy', async (_event, proxyUrl: unknown) => {
+    try {
+      const result = await testProxyConnection(String(proxyUrl ?? ''))
+      return { success: true, result }
+    } catch (error) {
+      return { success: false, error: formatAiErrorMessage(error, '代理连接测试失败') }
     }
   })
 

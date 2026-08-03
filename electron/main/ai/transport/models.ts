@@ -1,5 +1,6 @@
 import type { AppSettings } from '../shared-types'
 import { normalizeSettings } from '../settings'
+import { createProxyFetch } from '../proxy-fetch'
 
 /** 从模型列表接口获取到的模型信息 */
 export interface FetchedModel {
@@ -66,7 +67,7 @@ function buildModelsUrlCandidates(baseUrl: string): string[] {
 }
 
 /** 通过 OpenAI 兼容接口获取模型列表，自动尝试多个候选 URL */
-async function fetchModelsOpenAiCompatible(baseUrl: string, apiKey: string): Promise<FetchedModel[]> {
+async function fetchModelsOpenAiCompatible(baseUrl: string, apiKey: string, requestFetch: typeof fetch): Promise<FetchedModel[]> {
   const candidates = buildModelsUrlCandidates(baseUrl)
   if (candidates.length === 0) throw new Error('Base URL 为空，无法获取模型列表。')
   let lastError: string | null = null
@@ -74,7 +75,7 @@ async function fetchModelsOpenAiCompatible(baseUrl: string, apiKey: string): Pro
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), FETCH_MODELS_TIMEOUT_MS)
     try {
-      const response = await fetch(url, {
+      const response = await requestFetch(url, {
         method: 'GET',
         headers: { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
         signal: controller.signal
@@ -97,13 +98,13 @@ async function fetchModelsOpenAiCompatible(baseUrl: string, apiKey: string): Pro
 }
 
 /** 通过 Anthropic 原生接口获取模型列表 */
-async function fetchModelsAnthropic(baseUrl: string, apiKey: string): Promise<FetchedModel[]> {
+async function fetchModelsAnthropic(baseUrl: string, apiKey: string, requestFetch: typeof fetch): Promise<FetchedModel[]> {
   const trimmed = baseUrl.trim().replace(/\/+$/, '')
   const url = `${trimmed}/models`
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), FETCH_MODELS_TIMEOUT_MS)
   try {
-    const response = await fetch(url, {
+    const response = await requestFetch(url, {
       method: 'GET',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
       signal: controller.signal
@@ -133,7 +134,10 @@ export async function fetchModels(settings: AppSettings): Promise<FetchedModel[]
   if (!normalized.baseUrl.trim()) throw new Error('请先填写 Base URL。')
   if (!normalized.apiKey.trim()) throw new Error('需要 API Key 才能获取模型列表。')
   const rawBaseUrl = (settings.baseUrl?.trim() || '').replace(/\/+$/, '')
-  return fetchModelsOpenAiCompatible(rawBaseUrl || normalized.baseUrl, normalized.apiKey)
+  const requestFetch = createProxyFetch(normalized.proxyUrl)
+  return normalized.provider === 'anthropic'
+    ? fetchModelsAnthropic(rawBaseUrl || normalized.baseUrl, normalized.apiKey, requestFetch)
+    : fetchModelsOpenAiCompatible(rawBaseUrl || normalized.baseUrl, normalized.apiKey, requestFetch)
 }
 
 /**
@@ -147,5 +151,5 @@ export async function fetchImageModels(settings: AppSettings): Promise<FetchedMo
   const apiKey = settings.imageApiKey?.trim()
   if (!baseUrl) throw new Error('请先填写图片生成 Base URL。')
   if (!apiKey) throw new Error('请先填写图片生成 API Key。')
-  return fetchModelsOpenAiCompatible(baseUrl, apiKey)
+  return fetchModelsOpenAiCompatible(baseUrl, apiKey, createProxyFetch(settings.proxyUrl))
 }

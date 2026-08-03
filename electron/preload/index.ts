@@ -126,6 +126,8 @@ contextBridge.exposeInMainWorld('characterArc', {
   },
   /** 测试 AI 连接是否通畅，发送探测请求验证鉴权和网络 */
   testAiConnection: (settings: unknown) => ipcRenderer.invoke('characterarc:ai-test-connection', toIpcPayload(settings)),
+  /** 测试 HTTP 代理并返回当前出口 IP */
+  testProxyConnection: (proxyUrl: string) => ipcRenderer.invoke('characterarc:ai-test-proxy', proxyUrl),
   /** 获取 AI 供应商的可用模型列表 */
   fetchModels: (settings: unknown) => ipcRenderer.invoke('characterarc:ai-fetch-models', toIpcPayload(settings)),
   /** 获取图片生成接口的可用模型列表 */

@@ -3,6 +3,7 @@ import { createOpenAI } from '@ai-sdk/openai'
 import type { LanguageModel } from 'ai'
 import type { AppSettings } from './shared-types'
 import { extractReasoningText } from './reasoning'
+import { createProxyFetch } from './proxy-fetch'
 
 const ANTHROPIC_PROMPT_CACHE = {
   type: 'ephemeral' as const,
@@ -44,10 +45,11 @@ function isOllamaProvider(settings: AppSettings): boolean {
  * 同时从 chunk 中移除该字段（避免后续解析时有歧义），让正文 content 保持原状。
  */
 export function createReasoningInterceptedFetch(
-  onReasoningDelta?: (delta: string) => void
+  onReasoningDelta?: (delta: string) => void,
+  requestFetch: typeof fetch = globalThis.fetch
 ): typeof fetch {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const response = await fetch(input as RequestInfo, init)
+    const response = await requestFetch(input as RequestInfo, init)
     if (!response.ok || !response.body || !onReasoningDelta) return response
 
     const contentType = response.headers.get('content-type') || ''
@@ -156,15 +158,19 @@ function createOpenAICompatibleProvider(settings: AppSettings, customFetch?: typ
 }
 
 export function createModel(settings: AppSettings, onReasoningDelta?: (delta: string) => void): LanguageModel {
+  const requestFetch = createProxyFetch(settings.proxyUrl)
   if (settings.provider === 'anthropic') {
     const anthropic = createAnthropic({
       apiKey: settings.apiKey,
-      baseURL: settings.baseUrl || undefined
+      baseURL: settings.baseUrl || undefined,
+      fetch: requestFetch
     })
     return anthropic(settings.model)
   }
 
-  const customFetch = onReasoningDelta ? createReasoningInterceptedFetch(onReasoningDelta) : undefined
+  const customFetch = onReasoningDelta
+    ? createReasoningInterceptedFetch(onReasoningDelta, requestFetch)
+    : requestFetch
   const openai = createOpenAICompatibleProvider(settings, customFetch)
   if (shouldUseOpenAIResponses(settings)) {
     return openai(settings.model)
