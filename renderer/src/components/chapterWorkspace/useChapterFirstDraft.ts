@@ -835,7 +835,11 @@ export function useChapterFirstDraft(): {
             if (finalText) {
               executionLabel.value = '正在写入最终章节'
               updateProgress(95, '正在写入最终章节...')
-              appStore.updateChapterContent(ensureEditorHtmlContent(finalText))
+              appStore.updateChapterContent(ensureEditorHtmlContent(finalText), chapter.id)
+              await appStore.persistWorkspace()
+              if (appStore.persistenceError) {
+                throw new Error(`初稿已生成，但保存失败：${appStore.persistenceError}`)
+              }
             }
 
             if (steps['session-note'].enabled) {
@@ -875,6 +879,10 @@ export function useChapterFirstDraft(): {
                     createdAt: now,
                     updatedAt: now
                   }])
+                  await appStore.persistWorkspace()
+                  if (appStore.persistenceError) {
+                    throw new Error(`写作日志保存失败：${appStore.persistenceError}`)
+                  }
                 }
               } catch (error) {
                 handleStepError('session-note', error)

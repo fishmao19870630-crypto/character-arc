@@ -576,6 +576,7 @@ registerMainIpcHandlers({
   },
   normalizeWorkspacePayload: (payload) => normalizeWorkspacePayload(payload as WorkspacePayload | LegacyWorkspacePayload),
   ensureWorkspaceDb,
+  getWorkspaceDbIfInitialized,
   readWorkspaceSnapshot,
   writeWorkspaceSnapshot: (db, payload) => writeWorkspaceSnapshot(db, payload as WorkspacePayload),
   writeAppSettingsRow: (db, settings, metadata) =>

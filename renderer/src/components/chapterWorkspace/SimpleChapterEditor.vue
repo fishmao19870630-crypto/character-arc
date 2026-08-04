@@ -28,42 +28,10 @@ const emit = defineEmits<{
   'recovery-available': [snapshot: ChapterRecoverySnapshot | null]
 }>()
 
-const EMIT_DEBOUNCE_MS = 600
 const RECOVERY_DEBOUNCE_MS = 1_000
-let emitTimer: number | null = null
 let recoveryTimer: number | null = null
-let pendingEmit = false
-let pendingEmitChapterId = ''
-let pendingEmitHtml = ''
 let editorFocused = false
 let savedSelection: { from: number; to: number } | null = null
-
-function flushEmit(): void {
-  if (emitTimer !== null) {
-    window.clearTimeout(emitTimer)
-    emitTimer = null
-  }
-  if (pendingEmit && editor.value) {
-    pendingEmit = false
-    emit('update:modelValue', pendingEmitHtml || editor.value.getHTML(), pendingEmitChapterId || props.chapterId)
-    pendingEmitChapterId = ''
-    pendingEmitHtml = ''
-  }
-}
-
-function scheduleEmit(html: string): void {
-  pendingEmit = true
-  pendingEmitChapterId = props.chapterId
-  pendingEmitHtml = html
-  if (emitTimer !== null) window.clearTimeout(emitTimer)
-  emitTimer = window.setTimeout(() => {
-    emitTimer = null
-    pendingEmit = false
-    emit('update:modelValue', pendingEmitHtml, pendingEmitChapterId)
-    pendingEmitChapterId = ''
-    pendingEmitHtml = ''
-  }, EMIT_DEBOUNCE_MS)
-}
 
 function recoveryKey(chapterId: string): string {
   return `arc:chapter-recovery:${chapterId}`
@@ -164,7 +132,7 @@ const editor = useEditor({
   },
   onUpdate: ({ editor: e }) => {
     const html = e.getHTML()
-    scheduleEmit(html)
+    emit('update:modelValue', html, props.chapterId)
     scheduleRecovery(html)
   },
   onCreate: () => {
@@ -175,7 +143,6 @@ const editor = useEditor({
   },
   onBlur: () => {
     editorFocused = false
-    flushEmit()
   },
   onSelectionUpdate: () => {
     handleSelectionUpdate()
@@ -185,7 +152,6 @@ const editor = useEditor({
 watch(
   () => props.chapterId,
   (nextChapterId, previousChapterId) => {
-    flushEmit()
     if (recoveryTimer !== null) {
       window.clearTimeout(recoveryTimer)
       recoveryTimer = null
@@ -205,7 +171,6 @@ watch(
   () => props.modelValue,
   (next) => {
     if (!editor.value) return
-    if (pendingEmit) return
     const normalized = ensureEditorHtmlContent(next || '')
     if (normalized === editor.value.getHTML()) return
     editor.value.commands.setContent(normalized, { emitUpdate: false })
@@ -219,7 +184,6 @@ watch(
     if (!request || !editor.value) return
     if (request.chapterId !== props.chapterId) return
 
-    flushEmit()
     const e = editor.value
 
     if (request.mode === 'append') {
@@ -246,14 +210,11 @@ watch(
       const endPos = e.state.doc.content.size - 1
       e.chain().insertContentAt(endPos, request.content).run()
     }
-
-    emit('update:modelValue', e.getHTML(), props.chapterId)
     emit('consume-insertion', request.id)
   }
 )
 
 onBeforeUnmount(() => {
-  flushEmit()
   if (recoveryTimer !== null) {
     window.clearTimeout(recoveryTimer)
     recoveryTimer = null

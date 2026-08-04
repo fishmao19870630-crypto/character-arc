@@ -158,7 +158,6 @@ async function handleGlobalKeydown(e: KeyboardEvent) {
 
 function handleBeforeUnload() {
   appStore.flushWorkspaceSync()
-  void appStore.persistWorkspace()
 }
 
 onMounted(() => {

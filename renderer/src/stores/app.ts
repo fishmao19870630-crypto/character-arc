@@ -238,6 +238,7 @@ export const useAppStore = defineStore('app', () => {
 
   const {
     scheduledPersistAt,
+    isPersisting,
     persistenceError,
     scheduleWorkspaceSync,
     flushWorkspaceSync,
@@ -346,7 +347,7 @@ export const useAppStore = defineStore('app', () => {
   /** 是否为实时自动保存模式 */
   const isLiveAutoSave = computed(() => isLiveAutoSaveInterval(appSettings.value.autoSaveInterval))
   /** 是否有待持久化的更改 */
-  const isPersistencePending = computed(() => scheduledPersistAt.value !== null)
+  const isPersistencePending = computed(() => scheduledPersistAt.value !== null || isPersisting.value)
   /** 当前选中的章节对象 */
   const selectedChapter = computed(
     () => chapters.value.find((chapter) => chapter.id === selectedChapterId.value) ?? chapters.value[0]
@@ -3341,6 +3342,7 @@ export const useAppStore = defineStore('app', () => {
     hasHydrated,
     initialize,
     isLiveAutoSave,
+    isPersisting,
     isPersistencePending,
     deleteChapter,
     deleteCharacter,

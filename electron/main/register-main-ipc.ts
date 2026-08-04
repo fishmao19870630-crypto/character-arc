@@ -120,6 +120,7 @@ type RegisterMainIpcHandlersDeps = {
   ) => void
   normalizeWorkspacePayload: (payload: unknown) => unknown
   ensureWorkspaceDb: () => Promise<DatabaseSync>
+  getWorkspaceDbIfInitialized: () => DatabaseSync | null
   readWorkspaceSnapshot: (db: DatabaseSync) => unknown
   writeWorkspaceSnapshot: (db: DatabaseSync, payload: unknown) => void
   writeAppSettingsRow: (
@@ -1349,6 +1350,26 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
     } catch (error) {
       console.error('[workspace] saveWorkspace failed:', error)
       return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown workspace save error'
+      }
+    }
+  })
+
+  ipcMain.on('characterarc:save-workspace-sync', (event, payload: unknown) => {
+    try {
+      const db = deps.getWorkspaceDbIfInitialized()
+      if (!db) {
+        throw new Error('工作区数据库尚未初始化')
+      }
+      const normalized = deps.normalizeWorkspacePayload(payload)
+      deps.writeWorkspaceSnapshot(db, normalized)
+      deps.setLatestWorkspaceSnapshot(normalized)
+      deps.windowManager.broadcastWindowEvent('characterarc:workspace-sync-event', normalized, event.sender.id)
+      event.returnValue = { success: true }
+    } catch (error) {
+      console.error('[workspace] saveWorkspaceSync failed:', error)
+      event.returnValue = {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown workspace save error'
       }

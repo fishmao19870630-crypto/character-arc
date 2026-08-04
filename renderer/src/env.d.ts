@@ -244,6 +244,10 @@ declare global {
         success: boolean
         error?: string
       }>
+      saveWorkspaceSync: (payload: unknown) => {
+        success: boolean
+        error?: string
+      }
       saveAppSettings: (
         payload: import('@shared/ipc-types').SaveAppSettingsRequest
       ) => Promise<import('@shared/ipc-types').IpcResult>
