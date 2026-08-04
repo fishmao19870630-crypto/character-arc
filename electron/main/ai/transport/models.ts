@@ -143,7 +143,7 @@ export async function fetchModels(settings: AppSettings): Promise<FetchedModel[]
   }
   const rawBaseUrl = (settings.baseUrl?.trim() || '').replace(/\/+$/, '')
   const requestFetch = createProxyFetch(normalized.proxyUrl)
-  const models = isAnthropicProtocol(normalized.provider, normalized.model) && !isOpenCodeProvider(normalized.provider)
+  const models = isAnthropicProtocol(normalized.provider, normalized.model, normalized.apiProtocol) && !isOpenCodeProvider(normalized.provider)
     ? await fetchModelsAnthropic(rawBaseUrl || normalized.baseUrl, normalized.apiKey, requestFetch)
     : await fetchModelsOpenAiCompatible(rawBaseUrl || normalized.baseUrl, normalized.apiKey, requestFetch)
   return models.filter((model) => isSupportedProviderModel(normalized.provider, model.id))

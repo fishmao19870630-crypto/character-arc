@@ -312,6 +312,7 @@ export type WorkspacePayload = {
     model: string
     apiKey: string
     baseUrl: string
+    apiProtocol?: 'auto' | 'openai-responses' | 'openai-chat' | 'anthropic'
     proxyUrl: string
     temperature?: number
     topP?: number
@@ -322,6 +323,7 @@ export type WorkspacePayload = {
       baseUrl: string
       apiKey: string
       model: string
+      apiProtocol?: 'auto' | 'openai-responses' | 'openai-chat' | 'anthropic'
       temperature?: number
       topP?: number
     }>
@@ -453,6 +455,14 @@ export type LegacyWorkspacePayload = Omit<WorkspacePayload, 'workspaces'> & {
   }>
 }
 
+function normalizeApiProtocol(
+  value: unknown
+): 'auto' | 'openai-responses' | 'openai-chat' | 'anthropic' {
+  return value === 'openai-responses' || value === 'openai-chat' || value === 'anthropic'
+    ? value
+    : 'auto'
+}
+
 export function normalizeAppSettings(
   settings?: Partial<WorkspacePayload['appSettings']> | null
 ): WorkspacePayload['appSettings'] {
@@ -474,6 +484,7 @@ export function normalizeAppSettings(
     model: settings?.model || '',
     apiKey: settings?.apiKey || '',
     baseUrl: settings?.baseUrl || '',
+    apiProtocol: normalizeApiProtocol(settings?.apiProtocol),
     proxyUrl: settings?.proxyUrl || '',
     temperature,
     topP,
@@ -487,6 +498,7 @@ export function normalizeAppSettings(
             baseUrl: String(item.baseUrl ?? '').trim(),
             apiKey: String(item.apiKey ?? '').trim(),
             model: String(item.model ?? '').trim(),
+            apiProtocol: normalizeApiProtocol(item.apiProtocol),
             temperature:
               typeof item.temperature === 'number' && Number.isFinite(item.temperature)
                 ? Math.min(2, Math.max(0, item.temperature))

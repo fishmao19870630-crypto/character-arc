@@ -865,6 +865,7 @@ export interface AiProfile {
   baseUrl: string
   apiKey: string
   model: string
+  apiProtocol?: 'auto' | 'openai-responses' | 'openai-chat' | 'anthropic'
   temperature?: number
   topP?: number
 }
@@ -880,6 +881,8 @@ export interface AppSettings {
   apiKey: string
   /** API 基础地址 */
   baseUrl: string
+  /** API 线协议；auto 时按供应商和模型目录解析 */
+  apiProtocol?: 'auto' | 'openai-responses' | 'openai-chat' | 'anthropic'
   /** AI 网络请求使用的 HTTP/HTTPS 代理地址 */
   proxyUrl: string
   /** 可选：模型采样温度，留空时使用服务端默认值 */

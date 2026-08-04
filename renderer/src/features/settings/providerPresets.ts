@@ -5,7 +5,13 @@ export type ProviderPreset = AiProviderCatalogEntry
 
 export const providerPresets: readonly ProviderPreset[] = AI_PROVIDER_CATALOG
 
-export const providerOptions = providerPresets.map(({ label, value }) => ({ label, value }))
+const CUSTOM_PROVIDER_VALUES = new Set(['openai-compatible', 'anthropic-compatible'])
+
+// 自定义接口是最通用的入口，置顶；其余预设保持目录中的稳定顺序。
+export const providerOptions = [
+  ...providerPresets.filter(({ value }) => CUSTOM_PROVIDER_VALUES.has(value)),
+  ...providerPresets.filter(({ value }) => !CUSTOM_PROVIDER_VALUES.has(value))
+].map(({ label, value }) => ({ label, value }))
 
 export function getProviderPreset(provider: string): ProviderPreset {
   return providerPresets.find((item) => item.value === provider)

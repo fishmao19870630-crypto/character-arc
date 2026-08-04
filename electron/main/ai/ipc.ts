@@ -18,7 +18,7 @@ import type { SpiralBootstrapInput } from './spiral'
 import { formatAiErrorMessage } from './error-message'
 import { testProxyConnection } from './proxy-fetch'
 import { normalizeSettings } from './settings'
-import { providerSupportsTools } from '@shared/ai-provider-catalog'
+import { shouldTryStreamingAgent } from '@shared/ai-provider-catalog'
 
 /**
  * AI IPC 模块的外部依赖注入接口。
@@ -143,8 +143,12 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
       activeAiStreams.set(streamId, controller)
       const normalizedSettings = normalizeSettings(payload.settings)
 
-      const shouldTryAgent = (payload.task === 'chapter-first-draft' || payload.task === 'global-assistant')
-        && providerSupportsTools(normalizedSettings.provider, normalizedSettings.model)
+      const shouldTryAgent = shouldTryStreamingAgent(
+        payload.task,
+        normalizedSettings.provider,
+        normalizedSettings.model,
+        normalizedSettings.apiProtocol
+      )
 
       let streamedContent = ''
       void (async () => {
@@ -286,14 +290,10 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
       const controller = new AbortController()
       const knowledgeContext = retrieveKnowledgeContext(payload, deps!.getLatestWorkspaceSnapshot() as Parameters<typeof retrieveKnowledgeContext>[1])
       activeAiStreams.set(streamId, controller)
-      const normalizedSettings = normalizeSettings(payload.settings)
-      const shouldTryAgent = providerSupportsTools(normalizedSettings.provider, normalizedSettings.model)
-
       let streamedContent = ''
       void (async () => {
         try {
-          if (shouldTryAgent) {
-            try {
+          try {
             const result = await runStreamingAgentTask(
               payload,
               {
@@ -344,10 +344,9 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
               event.sender.send('characterarc:ai-stream-event', { streamId, type: 'done', content: streamedContent, result: result.result })
             }
             return
-            } catch (agentError) {
-              if (!isToolUseNotSupportedError(agentError)) throw agentError
-              streamedContent = ''
-            }
+          } catch (agentError) {
+            if (!isToolUseNotSupportedError(agentError)) throw agentError
+            streamedContent = ''
           }
 
           const result = await streamAiTask(

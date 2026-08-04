@@ -39,8 +39,18 @@ type AgentToolCallFinishEvent = AgentToolCallStartEvent & {
   error?: unknown
 }
 
-/** 步数耗尽收尾后，可见正文仍低于此长度则视为「未产出有效答案」。 */
-const MIN_USEFUL_TEXT_LENGTH = 8
+function shouldSynthesizeFinalAnswer(input: {
+  disableTools?: boolean
+  finalStepText: string
+  finalStepHasToolCalls: boolean
+  toolCallCount: number
+  aborted: boolean
+}): boolean {
+  return !input.disableTools
+    && input.toolCallCount > 0
+    && (input.finalStepHasToolCalls || !input.finalStepText.trim())
+    && !input.aborted
+}
 
 /**
  * 稳定序列化工具参数：键按字典序排序，让 `{a:1,b:2}` 与 `{b:2,a:1}` 得到同一指纹，
@@ -78,6 +88,7 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
   // 记录已执行过的「工具+参数」指纹及其结果，命中重复时直接回灌旧结果，
   // 避免模型反复读同一份数据空烧步数。
   const seenToolResults = new Map<string, string>()
+  const toolObservations: Array<{ tool: string; args: Record<string, unknown>; content: string }> = []
 
   const sdkTools: Record<string, ReturnType<typeof dynamicTool>> = {}
   for (const t of params.tools) {
@@ -93,9 +104,11 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
         }
         const result = await t.handler(args, params.ctx)
         if (result.isError) {
+          toolObservations.push({ tool: t.definition.name, args, content: `工具执行失败：${result.content}` })
           throw new Error(result.content)
         }
         seenToolResults.set(fingerprint, result.content)
+        toolObservations.push({ tool: t.definition.name, args, content: result.content })
         return result.content
       }
     })
@@ -139,7 +152,7 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
     onReasoningDelta: (delta: string) => void,
     captureError: (error: unknown) => void
   ) => streamText({
-    model: createModel(params.settings, onReasoningDelta),
+    model: createModel(params.settings),
     system: buildSystemPrompt(params.settings, params.systemPrompt),
     prompt: params.userPrompt,
     ...(params.disableTools ? {} : { tools: sdkTools, stopWhen: stepCountIs(maxSteps) }),
@@ -206,11 +219,7 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
     throw new Error('AI 流式请求重试后仍未返回结果。')
   }
 
-  // 流式正文兜底（两个分支共用）：
-  //   - 推理模型可能把内容塞进 reasoning/thinking blocks，textStream 拿不到
-  //   - 部分 openai-compatible 中转站在带 tools 时不吐 text-delta，
-  //     只把正文放到最终 response 里
-  // 若流式没拿到文本但最终结果有，就把它一次性回灌进来。
+  // 若流式事件没拿到正文、但 SDK 在响应结束后汇总出了 text，回灌最终结果。
   if (!fullText) {
     try {
       const finalText = await result.text
@@ -225,21 +234,23 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
 
   fullText = stripReasoningMarkup(fullText)
   const finishReason = await result.finishReason
+  const steps = await result.steps
+  const finalStep = steps.at(-1)
+  const finalStepText = stripReasoningMarkup(finalStep?.text ?? '')
+  const finalStepHasToolCalls = (finalStep?.toolCalls.length ?? 0) > 0
 
   let usage: AiRunUsage = toUsage(await result.totalUsage)
-
-
-  // 步数耗尽收尾：finishReason='tool-calls' 说明模型还想继续调工具但已撞上 maxSteps，
-  // 此时最后一步往往是工具调用、可见正文为空或残缺。不报错也不返回残缺，
-  // 而是禁用工具再调一次，让模型基于已收集的工具结果直接产出完整答案。
-  if (
-    !params.disableTools
-    && finishReason === 'tool-calls'
-    && fullText.trim().length < MIN_USEFUL_TEXT_LENGTH
-    && !params.ctx.signal.aborted
-  ) {
-    const priorMessages = (await result.response).messages
-    const synthesis = await synthesizeFinalAnswer(params, priorMessages, (delta) => {
+  // 部分中转站在带 tools 时会返回工具结果和 output tokens，却丢失最终 text delta，
+  // 且 finishReason 不一定是 tool-calls。最后一步仍在调工具或没有正文时，就禁用工具收尾。
+  // 收尾只传纯文本工具结果，避免再次触发 Responses / Chat 工具消息转换兼容问题。
+  if (shouldSynthesizeFinalAnswer({
+    disableTools: params.disableTools,
+    finalStepText,
+    finalStepHasToolCalls,
+    toolCallCount: toolCalls.length,
+    aborted: params.ctx.signal.aborted
+  })) {
+    const synthesis = await synthesizeFinalAnswer(params, toolObservations, (delta) => {
       fullText += delta
       params.handlers.onTextDelta(delta)
     })
@@ -290,27 +301,33 @@ function toUsage(totalUsage: {
 }
 
 /**
- * 步数耗尽后的收尾调用：禁用工具，把原始对话 + 已产生的工具结果交回模型，
+ * 工具调用后的收尾调用：禁用工具，把原始问题 + 已产生的工具结果交回模型，
  * 要求其基于已收集的信息直接产出最终答案。文本通过 onDelta 实时回灌。
  */
 async function synthesizeFinalAnswer(
   params: RunAgentParams,
-  priorMessages: Awaited<ReturnType<typeof streamText>['response']>['messages'],
+  observations: Array<{ tool: string; args: Record<string, unknown>; content: string }>,
   onDelta: (delta: string) => void
 ): Promise<{ text: string; usage?: AiRunUsage }> {
   params.handlers.onAgentStatus('正在整理最终答案...', params.maxSteps ?? 8, params.maxSteps ?? 8)
 
+  const observationText = observations.length > 0
+    ? observations.map((item, index) => [
+        `### 工具结果 ${index + 1}：${item.tool}`,
+        `参数：${stableStringify(item.args)}`,
+        item.content
+      ].join('\n')).join('\n\n')
+    : '工具已执行，但没有返回可用结果。'
+
   const result = streamText({
-    model: createModel(params.settings, params.handlers.onReasoningDelta),
+    model: createModel(params.settings),
     system: buildSystemPrompt(params.settings, params.systemPrompt),
-    messages: [
-      { role: 'user', content: params.userPrompt },
-      ...priorMessages,
-      {
-        role: 'user',
-        content: '工具调用次数已达上限。请不要再调用任何工具，基于上面已经收集到的信息，现在直接给出完整的最终答案，并严格满足任务要求的输出格式。'
-      }
-    ],
+    prompt: [
+      params.userPrompt,
+      '以下是本轮已经收集到的工具结果，仅作为回答依据：',
+      observationText,
+      '请不要调用任何工具，直接给出完整的最终答案，并严格满足任务要求的输出格式。'
+    ].join('\n\n'),
     maxOutputTokens: params.maxTokens,
     abortSignal: params.ctx.signal
   })
@@ -327,7 +344,7 @@ async function synthesizeFinalAnswer(
     }
   }
 
-  // 中转站可能把正文塞进 reasoning block，textStream 取不到时从最终结果兜底。
+  // 流式事件缺失时，从 SDK 汇总的最终 text 兜底。
   if (!text) {
     const finalText = await result.text
     if (finalText) {

@@ -1,6 +1,7 @@
 import type { AiTaskName, AiTaskPayload, AppSettings, ProviderName } from './shared-types'
 import {
   getAiProviderCatalogEntry,
+  normalizeAiProtocolPreference,
   normalizeAiBaseUrl,
   normalizeAiProviderName
 } from '@shared/ai-provider-catalog'
@@ -40,6 +41,7 @@ export function normalizeSettings(settings: AppSettings): AppSettings {
     model: settings.model?.trim() || defaults.model,
     apiKey: settings.apiKey?.trim() || '',
     baseUrl,
+    apiProtocol: normalizeAiProtocolPreference(settings.apiProtocol),
     proxyUrl: settings.proxyUrl?.trim() || '',
     temperature: normalizeOptionalNumber(settings.temperature, 0, 2),
     topP: normalizeOptionalNumber(settings.topP, 0, 1),

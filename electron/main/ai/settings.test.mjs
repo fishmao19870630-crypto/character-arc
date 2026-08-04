@@ -3,10 +3,11 @@ import test from 'node:test'
 
 import {
   getAiProviderCatalogEntry,
+  normalizeAiProtocolPreference,
   normalizeAiBaseUrl,
   normalizeAiProviderName,
-  providerSupportsTools,
-  resolveAiProviderProtocol
+  resolveAiProviderProtocol,
+  shouldTryStreamingAgent
 } from '../../shared/ai-provider-catalog.ts'
 
 test('厂商预设会补齐默认地址和推荐模型', () => {
@@ -71,8 +72,44 @@ test('OpenCode Zen 根据模型族选择协议', () => {
   assert.equal(resolveAiProviderProtocol('opencode-zen', 'kimi-k2.6'), 'openai-chat')
 })
 
-test('OpenCode Chat 模型降级为无工具的普通流式请求', () => {
-  assert.equal(providerSupportsTools('opencode-zen', 'deepseek-v4-flash-free'), false)
-  assert.equal(providerSupportsTools('opencode-zen', 'claude-sonnet-4-6'), true)
-  assert.equal(providerSupportsTools('openai-compatible', 'deepseek-v4-flash-free'), true)
+test('显式协议配置覆盖模型目录推断', () => {
+  assert.equal(normalizeAiProtocolPreference('openai-responses'), 'openai-responses')
+  assert.equal(normalizeAiProtocolPreference('invalid'), 'auto')
+  assert.equal(
+    resolveAiProviderProtocol('opencode-zen', 'unknown-future-model', 'anthropic'),
+    'anthropic'
+  )
+  assert.equal(
+    resolveAiProviderProtocol('opencode-zen', 'claude-sonnet-4-6', 'openai-chat'),
+    'openai-chat'
+  )
+})
+
+test('OpenCode Chat 全局助手启用工具，章节初稿保持单次生成', () => {
+  assert.equal(
+    shouldTryStreamingAgent('global-assistant', 'opencode-zen', 'deepseek-v4-flash-free'),
+    true
+  )
+  assert.equal(
+    shouldTryStreamingAgent('chapter-first-draft', 'opencode-zen', 'deepseek-v4-flash-free'),
+    false
+  )
+  assert.equal(
+    shouldTryStreamingAgent(
+      'chapter-first-draft',
+      'opencode-zen',
+      'deepseek-v4-flash-free',
+      'openai-responses'
+    ),
+    true
+  )
+  assert.equal(
+    shouldTryStreamingAgent('chapter-first-draft', 'opencode-zen', 'gpt-5.6-sol'),
+    true
+  )
+  assert.equal(
+    shouldTryStreamingAgent('chapter-first-draft', 'opencode-zen', 'claude-sonnet-4-6'),
+    true
+  )
+  assert.equal(shouldTryStreamingAgent('chapter-memo', 'opencode-zen', 'gpt-5.6-sol'), false)
 })

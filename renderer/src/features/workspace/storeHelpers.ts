@@ -233,6 +233,7 @@ export const defaultAppSettings: AppSettings = {
   model: 'deepseek-chat',
   apiKey: '',
   baseUrl: 'https://api.deepseek.com/v1',
+  apiProtocol: 'auto',
   proxyUrl: '',
   aiProfiles: [],
   activeAiProfileId: '',
@@ -338,6 +339,12 @@ function normalizeAiProfile(profile: AiProfile): AiProfile {
     baseUrl: String(profile.baseUrl ?? '').trim(),
     apiKey: String(profile.apiKey ?? '').trim(),
     model: String(profile.model ?? '').trim(),
+    apiProtocol:
+      profile.apiProtocol === 'openai-responses'
+      || profile.apiProtocol === 'openai-chat'
+      || profile.apiProtocol === 'anthropic'
+        ? profile.apiProtocol
+        : 'auto',
     temperature: normalizeOptionalNumber(profile.temperature, 0, 2),
     topP: normalizeOptionalNumber(profile.topP, 0, 1)
   }
@@ -349,6 +356,12 @@ export function normalizeAppSettings(settings?: Partial<AppSettings> | null): Ap
   const model = sanitizeSettingString(source.model, defaultAppSettings.model)
   const apiKey = sanitizeSettingString(source.apiKey, defaultAppSettings.apiKey)
   const baseUrl = sanitizeSettingString(source.baseUrl, defaultAppSettings.baseUrl)
+  const apiProtocol =
+    source.apiProtocol === 'openai-responses'
+    || source.apiProtocol === 'openai-chat'
+    || source.apiProtocol === 'anthropic'
+      ? source.apiProtocol
+      : 'auto'
   const temperature = normalizeOptionalNumber(source.temperature, 0, 2)
   const topP = normalizeOptionalNumber(source.topP, 0, 1)
 
@@ -359,7 +372,7 @@ export function normalizeAppSettings(settings?: Partial<AppSettings> | null): Ap
 
   if (aiProfiles.length === 0 && (apiKey || model !== defaultAppSettings.model)) {
     const migratedId = `profile-${Date.now()}`
-    aiProfiles = [{ id: migratedId, name: provider || 'Default', provider, baseUrl, apiKey, model, temperature, topP }]
+    aiProfiles = [{ id: migratedId, name: provider || 'Default', provider, baseUrl, apiKey, model, apiProtocol, temperature, topP }]
     activeAiProfileId = migratedId
   }
 
@@ -372,6 +385,7 @@ export function normalizeAppSettings(settings?: Partial<AppSettings> | null): Ap
     model,
     apiKey,
     baseUrl,
+    apiProtocol,
     proxyUrl: sanitizeSettingString(source.proxyUrl, defaultAppSettings.proxyUrl),
     temperature,
     topP,

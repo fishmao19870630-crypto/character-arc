@@ -46,7 +46,7 @@ The DB lives under `<userData>/data/workspace.db`. `configureCanonicalUserDataPa
 
 The core dispatch is in `ai/runtime/orchestrator.ts`:
 
-- `runAiTask(task, knowledgeContext, signal)` — non-streaming. Routes to **agent loop** if `task.task ∈ AGENT_TASK_WHITELIST` (currently `outline-batch`, `reference-deep-analyze`, `style-fingerprint-extract`, `global-assistant`) **and** the provider supports `tool_use`; otherwise falls through to the single-shot path.
+- `runAiTask(task, knowledgeContext, signal)` — non-streaming. Routes to **agent loop** if `task.task ∈ AGENT_TASK_WHITELIST` (currently `outline-batch`, `reference-deep-analyze`, `style-fingerprint-extract`, `global-assistant`). Tool support is negotiated by the SDK/provider at request time; only an explicit upstream "tools unsupported" error triggers the existing single-shot fallback.
 - `streamAiTask(task, handlers, signal, knowledgeContext)` — streaming. Only enabled for `chapter-assistant`, `global-assistant`, `chapter-first-draft`, `chapter-memo`, `chapter-audit`.
 - `runAgentTask` (`ai/agent/`) drives the AI SDK `streamText` loop with progressive skill disclosure, capped at `maxSteps = 8`.
 
@@ -54,7 +54,7 @@ Both paths share: settings normalization (`ai/settings.ts`), skill resolution (`
 
 Each task type is a `TaskHandler` (see `ai/tasks/base.ts`) registered in `ai/tasks/index.ts`. **To add a new AI task: implement `buildPrompt`/`normalize`/`validate`, register it, add a Zod schema in `ai/tasks/object-schemas.ts` if `outputType: 'json'`, and (optionally) add it to `AGENT_TASK_WHITELIST` once tool-use is desired.**
 
-Provider abstraction (`ai/provider.ts`) wraps `@ai-sdk/openai` and `@ai-sdk/anthropic`. Anthropic requests automatically attach `cacheControl: { type: 'ephemeral', ttl: '5m' }` to the system prompt. `providerSupportsTools` returns false for DeepSeek and Ollama — that gates agent-loop routing.
+Provider abstraction (`ai/provider.ts` + `ai/protocol-adapter.ts`) maps three wire protocols to their official Vercel AI SDK providers: OpenAI Responses (`@ai-sdk/openai`), Anthropic Messages (`@ai-sdk/anthropic`), and OpenAI Chat Completions (`@ai-sdk/openai-compatible`). The transport layer only handles proxying and timeouts; it must not parse or rewrite reasoning or tool-call SSE payloads. Provider/model presets choose a protocol by default, while `apiProtocol` allows an explicit override for new models and relays. Tool-capable tasks send standard tools without model-name blacklists, and the connection test verifies a real forced tool call.
 
 After `chapter-first-draft` returns, `runPostGenerationPipeline` asynchronously: (1) extracts a `StateDelta` via a second LLM call, (2) runs `runLightCheck` against the pre-state, (3) persists the delta into the story-state DB, (4) builds vector index segments via `indexChapterSegments`. Failures here surface as warnings emitted on `characterarc:chapter-post-generation-issues`, not as task failures.
 

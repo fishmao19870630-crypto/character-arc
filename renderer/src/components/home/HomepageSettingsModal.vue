@@ -45,12 +45,19 @@ const aiTimeoutOptions = [
   { label: '300 秒', value: 300 },
   { label: '600 秒', value: 600 }
 ]
+const apiProtocolOptions = [
+  { label: '自动（按厂商模型目录）', value: 'auto' },
+  { label: 'OpenAI Responses', value: 'openai-responses' },
+  { label: 'Anthropic Messages', value: 'anthropic' },
+  { label: 'OpenAI Chat Completions', value: 'openai-chat' }
+]
 
 const draftSettings = reactive<AppSettings>({
   provider: '',
   model: '',
   apiKey: '',
   baseUrl: '',
+  apiProtocol: 'auto',
   proxyUrl: '',
   temperature: undefined,
   topP: undefined,
@@ -135,6 +142,7 @@ function syncDraftFromStore(): void {
   draftSettings.model = appStore.appSettings.model
   draftSettings.apiKey = appStore.appSettings.apiKey
   draftSettings.baseUrl = appStore.appSettings.baseUrl
+  draftSettings.apiProtocol = appStore.appSettings.apiProtocol ?? 'auto'
   draftSettings.proxyUrl = appStore.appSettings.proxyUrl
   proxyTestIp.value = ''
   draftSettings.temperature = appStore.appSettings.temperature
@@ -225,6 +233,7 @@ function handleAddProfile(): void {
     baseUrl: defaults.baseUrl,
     apiKey: '',
     model: defaults.model,
+    apiProtocol: 'auto',
     temperature: undefined,
     topP: undefined
   }
@@ -244,6 +253,7 @@ function handleCopyProfile(): void {
     baseUrl: source.baseUrl,
     apiKey: source.apiKey,
     model: source.model,
+    apiProtocol: source.apiProtocol ?? 'auto',
     temperature: source.temperature,
     topP: source.topP
   }
@@ -277,6 +287,7 @@ function updateEditingProfile(updates: Partial<AiProfile>): void {
     if (updates.model !== undefined) draftSettings.model = updates.model
     if (updates.apiKey !== undefined) draftSettings.apiKey = updates.apiKey
     if (updates.baseUrl !== undefined) draftSettings.baseUrl = updates.baseUrl
+    if (updates.apiProtocol !== undefined) draftSettings.apiProtocol = updates.apiProtocol
     if ('temperature' in updates) draftSettings.temperature = updates.temperature
     if ('topP' in updates) draftSettings.topP = updates.topP
   }
@@ -287,7 +298,8 @@ function handleProviderChange(provider: string): void {
   updateEditingProfile({
     provider,
     model: defaults.model,
-    baseUrl: defaults.baseUrl
+    baseUrl: defaults.baseUrl,
+    apiProtocol: 'auto'
   })
   fetchedModels.value = []
 }
@@ -329,6 +341,7 @@ function buildProfilePayload(): AppSettings {
     model: profile.model,
     apiKey: profile.apiKey,
     baseUrl: profile.baseUrl,
+    apiProtocol: profile.apiProtocol ?? 'auto',
     temperature: profile.temperature,
     topP: profile.topP
   }
@@ -361,8 +374,10 @@ async function handleTestAiConnection(): Promise<void> {
     const payload = buildProfilePayload()
     const result = await window.characterArc.testAiConnection(toIpcPayload(payload))
     if (!result.success) throw new Error(result.error ?? '模型连接测试失败')
-    const res = result.result as { provider?: string; model?: string } | undefined
-    message.success(`模型连接成功：${res?.provider ?? payload.provider} / ${res?.model ?? payload.model}`)
+    const res = result.result as { provider?: string; model?: string; protocol?: string } | undefined
+    message.success(
+      `模型与工具调用测试成功：${res?.provider ?? payload.provider} / ${res?.model ?? payload.model} / ${res?.protocol ?? 'auto'}`
+    )
   } catch (error) {
     message.error(error instanceof Error ? error.message : '模型连接测试失败')
   } finally {
@@ -380,6 +395,7 @@ async function saveSettings(): Promise<void> {
     model: activeProfile?.model ?? draftSettings.model,
     apiKey: activeProfile?.apiKey ?? draftSettings.apiKey,
     baseUrl: activeProfile?.baseUrl ?? draftSettings.baseUrl,
+    apiProtocol: activeProfile?.apiProtocol ?? draftSettings.apiProtocol ?? 'auto',
     temperature: activeProfile?.temperature ?? draftSettings.temperature,
     topP: activeProfile?.topP ?? draftSettings.topP
   }
@@ -478,6 +494,8 @@ async function saveSettings(): Promise<void> {
                 <n-select
                   :options="providerOptions"
                   :value="editingProfile.provider"
+                  filterable
+                  placeholder="搜索或选择模型厂商"
                   @update:value="(value) => handleProviderChange(value ?? 'openai-compatible')"
                 />
               </n-form-item>
@@ -537,6 +555,13 @@ async function saveSettings(): Promise<void> {
             <details class="advanced-settings">
               <summary>API 高级设置</summary>
               <div class="advanced-settings-body">
+                <n-form-item label="API 协议">
+                  <n-select
+                    :options="apiProtocolOptions"
+                    :value="editingProfile.apiProtocol ?? 'auto'"
+                    @update:value="(value) => updateEditingProfile({ apiProtocol: value ?? 'auto' })"
+                  />
+                </n-form-item>
                 <div class="settings-grid">
                   <n-form-item label="Temperature">
                     <n-input-number

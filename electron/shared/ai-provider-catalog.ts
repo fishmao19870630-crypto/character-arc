@@ -1,4 +1,5 @@
 export type AiProviderProtocol = 'openai-responses' | 'openai-chat' | 'anthropic'
+export type AiProtocolPreference = 'auto' | AiProviderProtocol
 
 export interface AiProviderCatalogEntry {
   label: string
@@ -96,7 +97,18 @@ export function normalizeAiBaseUrl(provider: string, rawBaseUrl: string): string
   return !path && !/\/v\d+$/i.test(baseUrl) ? `${baseUrl}/v1` : baseUrl
 }
 
-export function resolveAiProviderProtocol(provider: string, model = ''): AiProviderProtocol {
+export function normalizeAiProtocolPreference(value: unknown): AiProtocolPreference {
+  return value === 'openai-responses' || value === 'openai-chat' || value === 'anthropic'
+    ? value
+    : 'auto'
+}
+
+export function resolveAiProviderProtocol(
+  provider: string,
+  model = '',
+  preference: AiProtocolPreference = 'auto'
+): AiProviderProtocol {
+  if (preference !== 'auto') return preference
   const normalizedProvider = provider.trim().toLowerCase()
   const normalizedModel = model.trim().toLowerCase()
 
@@ -115,24 +127,33 @@ export function resolveAiProviderProtocol(provider: string, model = ''): AiProvi
   return getAiProviderCatalogEntry(normalizedProvider)?.protocol ?? 'openai-chat'
 }
 
-export function isAnthropicProtocol(provider: string, model = ''): boolean {
-  return resolveAiProviderProtocol(provider, model) === 'anthropic'
+export function isAnthropicProtocol(
+  provider: string,
+  model = '',
+  preference: AiProtocolPreference = 'auto'
+): boolean {
+  return resolveAiProviderProtocol(provider, model, preference) === 'anthropic'
 }
 
-export function isOpenAIChatProtocol(provider: string, model = ''): boolean {
-  return resolveAiProviderProtocol(provider, model) === 'openai-chat'
+export function isOpenAIChatProtocol(
+  provider: string,
+  model = '',
+  preference: AiProtocolPreference = 'auto'
+): boolean {
+  return resolveAiProviderProtocol(provider, model, preference) === 'openai-chat'
 }
 
-/**
- * 判断当前模型是否适合走带 tools 的 Agent loop。
- * OpenCode 的 Chat Completions 模型并不统一支持 tools；这类模型仍可像
- * OpenFic 一样稳定执行普通 Chat Completions，因此应降级到单次流式请求。
- */
-export function providerSupportsTools(provider: string, model = ''): boolean {
-  const normalizedProvider = provider.trim().toLowerCase()
-  if (normalizedProvider === 'ollama' || normalizedProvider === 'deepseek') return false
-  if (isOpenCodeProvider(normalizedProvider) && isOpenAIChatProtocol(normalizedProvider, model)) return false
-  return true
+export function shouldTryStreamingAgent(
+  task: string,
+  provider: string,
+  model: string,
+  protocol: AiProtocolPreference = 'auto'
+): boolean {
+  if (task === 'global-assistant') return true
+  if (task !== 'chapter-first-draft') return false
+
+  // OpenCode Chat 长正文保持单次流式生成；全局助手仍使用标准 tools Agent。
+  return !(isOpenCodeProvider(provider) && isOpenAIChatProtocol(provider, model, protocol))
 }
 
 export function isSupportedProviderModel(provider: string, model: string): boolean {

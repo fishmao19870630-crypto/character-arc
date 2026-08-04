@@ -38,7 +38,6 @@ import { getProjectView, type SnapshotAccessor } from './providers/shared'
 import { saveRuntimeKnowledgeDocument } from './knowledge-writer'
 import { createEvidenceLedger, wrapToolsWithRuntimeBudget } from './evidence-ledger'
 import { createRuntimePlan, type AssistantRuntimePlan } from './planner'
-import { providerSupportsTools } from '@shared/ai-provider-catalog'
 
 /** 大多数主流长上下文模型的保守窗口。实际 provider 若更小，会由压缩层兜底。 */
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 128000
@@ -222,7 +221,7 @@ export function createExecutionPlanner(
 
     return {
       systemPrompt,
-      tools: providerSupportsTools(settings.provider, settings.model) ? toolFactory : [],
+      tools: toolFactory,
       settings,
       maxOutputTokens,
       runtimePlan,

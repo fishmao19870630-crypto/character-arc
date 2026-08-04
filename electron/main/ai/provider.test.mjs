@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   AiStreamProtocolError,
+  createProviderTransportFetch,
   createTerminalAwareSseStream,
   fetchWithResponseStartTimeout,
   isAiStreamIdleTimeoutError,
@@ -61,6 +62,23 @@ test('识别兼容接口的流式终止事件，不依赖上游关闭连接', ()
   assert.equal(isTerminalSseEvent('data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n'), true)
   assert.equal(isTerminalSseEvent('data: {"choices":[{"delta":{"content":"继续"},"finish_reason":null}]}\n\n'), false)
   assert.equal(isTerminalSseEvent('event: content_block_delta\ndata: {"type":"content_block_delta"}\n\n'), false)
+})
+
+test('Provider transport 不改写 reasoning 与工具调用事件', async () => {
+  const payload = [
+    'data: {"choices":[{"delta":{"reasoning_content":"先读取人物卡"}}]}\n\n',
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read_project_data","arguments":"{}"}}]}}]}\n\n',
+    'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
+  ].join('')
+  const requestFetch = async () => new Response(payload, {
+    headers: { 'content-type': 'text/event-stream' }
+  })
+
+  const response = await createProviderTransportFetch(requestFetch, 100, 100)(
+    'https://opencode.test/zen/v1/chat/completions'
+  )
+
+  assert.equal(await response.text(), payload)
 })
 
 test('关闭流前保留终止事件之前的全部正文事件', () => {

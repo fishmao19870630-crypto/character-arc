@@ -209,10 +209,8 @@ export async function aiStreamTextWithUsage(
   const providerOptions = resolveProviderOptions(settings, { preferLowReasoning: true })
   const samplingOptions = resolveSamplingOptions(settings)
   let streamError: unknown = null
-  // 推理模型（mimo / deepseek-r1 / 智谱 GLM-Z1 等）通过非标准 reasoning_content 字段
-  // 返回思考内容，AI SDK 不解析。这里把回调注入到自定义 fetch，由其在 SSE 流中拦截。
   const result = streamText({
-    model: createModel(settings, handlers.onReasoningDelta),
+    model: createModel(settings),
     system: buildSystemPrompt(settings, prompt.system),
     prompt: prompt.user,
     maxOutputTokens: maxTokens,
@@ -300,7 +298,7 @@ export async function aiStreamObjectWithUsage(
   let streamError: unknown = null
   const samplingOptions = resolveSamplingOptions(settings)
   const result = streamObject({
-    model: createModel(settings, handlers.onReasoningDelta),
+    model: createModel(settings),
     system: buildSystemPrompt(settings, prompt.system),
     prompt: prompt.user,
     schema,

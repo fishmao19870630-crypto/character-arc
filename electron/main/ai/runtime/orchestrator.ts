@@ -15,7 +15,7 @@ import { getTaskHandler } from '../tasks'
 import { getStructuredTaskSchema } from '../tasks/object-schemas'
 import { resolveTaskSkills } from '../skills'
 import { addAiRunUsage, aiGenerateText, aiGenerateTextWithUsage, aiStreamObjectWithUsage, aiStreamTextWithUsage } from '../generate'
-import { isToolUseNotSupportedError } from '../provider'
+import { buildSystemPrompt, createModel, isToolUseNotSupportedError } from '../provider'
 import { buildPromptInput } from './context-builder'
 import { enrichTaskContextForGeneration } from './task-context'
 import { buildRunMeta, buildResponsePreview } from './run-meta'
@@ -29,9 +29,15 @@ import type { StateDelta } from '../../story-state-store'
 import { indexChapterSegments } from '../knowledge-retrieval'
 import { runLightCheck } from '../audit/light-check'
 import { formatAiErrorMessage } from '../error-message'
-import { isOpenCodeProvider, isOpenAIChatProtocol } from '@shared/ai-provider-catalog'
+import {
+  isOpenCodeProvider,
+  isOpenAIChatProtocol,
+  resolveAiProviderProtocol
+} from '@shared/ai-provider-catalog'
 import { createHash, randomUUID } from 'node:crypto'
 import { BackgroundTaskCoordinator } from './background-task-coordinator'
+import { generateText, tool } from 'ai'
+import { z } from 'zod'
 import {
   beginChapterProcessing,
   finishChapterProcessing,
@@ -384,19 +390,46 @@ export async function streamAiTask(
  * @param rawSettings - 原始应用设置
  * @returns 成功时返回当前 provider 和 model 名称
  */
-export async function testAiConnection(rawSettings: AppSettings): Promise<{ provider: string; model: string }> {
+export async function testAiConnection(rawSettings: AppSettings): Promise<{
+  provider: string
+  model: string
+  protocol: string
+  tools: true
+}> {
   const settings = normalizeSettings(rawSettings)
   validateSettings(settings)
   const probePrompt = {
-    system: 'You are a connectivity probe. Reply with CONNECTED only.',
-    user: 'Return CONNECTED'
+    system: 'You are a connectivity probe. Call the required tool exactly once.',
+    user: 'Call characterarc_connection_probe now.'
   }
   logPrompt('TEST', settings, probePrompt, 'test-connection')
-  const text = await aiGenerateText(settings, probePrompt, 16, undefined, { forceNonStreaming: true })
-  if (!text.trim()) {
-    throw new Error('模型连接成功，但没有返回可读内容。')
+  let toolExecuted = false
+  await generateText({
+    model: createModel(settings),
+    system: buildSystemPrompt(settings, probePrompt.system),
+    prompt: probePrompt.user,
+    tools: {
+      characterarc_connection_probe: tool({
+        description: 'CharacterArc connection capability probe.',
+        inputSchema: z.object({}),
+        execute: async () => {
+          toolExecuted = true
+          return 'CONNECTED'
+        }
+      })
+    },
+    toolChoice: { type: 'tool', toolName: 'characterarc_connection_probe' },
+    maxOutputTokens: 4096
+  })
+  if (!toolExecuted) {
+    throw new Error('模型连接成功，但没有返回标准工具调用。请检查 API 协议设置。')
   }
-  return { provider: settings.provider, model: settings.model }
+  return {
+    provider: settings.provider,
+    model: settings.model,
+    protocol: resolveAiProviderProtocol(settings.provider, settings.model, settings.apiProtocol),
+    tools: true
+  }
 }
 
 let chapterWarningsEmitter: ((payload: ChapterStateWarningsPayload) => void) | null = null

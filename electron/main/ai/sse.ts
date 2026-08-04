@@ -213,3 +213,31 @@ export async function fetchWithResponseStartTimeout(
     if (timer) clearTimeout(timer)
   }
 }
+
+/**
+ * 为 AI SDK provider 增加连接超时和 SSE 空闲超时，但保持事件内容完全不变。
+ */
+export function createProviderTransportFetch(
+  requestFetch: typeof fetch,
+  idleTimeoutMs: number,
+  responseStartTimeoutMs: number
+): typeof fetch {
+  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const response = await fetchWithResponseStartTimeout(
+      requestFetch,
+      input,
+      init,
+      responseStartTimeoutMs
+    )
+    if (!response.ok || !response.body) return response
+
+    const contentType = response.headers.get('content-type') || ''
+    if (!contentType.includes('text/event-stream')) return response
+
+    return new Response(createTerminalAwareSseStream(response.body, idleTimeoutMs), {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers
+    })
+  }
+}
