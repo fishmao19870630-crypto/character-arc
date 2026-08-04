@@ -5,8 +5,8 @@ import {
   getAiProviderCatalogEntry,
   normalizeAiBaseUrl,
   normalizeAiProviderName,
-  resolveAiProviderProtocol,
-  shouldBufferOpenCodeChat
+  providerSupportsTools,
+  resolveAiProviderProtocol
 } from '../../shared/ai-provider-catalog.ts'
 
 test('厂商预设会补齐默认地址和推荐模型', () => {
@@ -71,14 +71,8 @@ test('OpenCode Zen 根据模型族选择协议', () => {
   assert.equal(resolveAiProviderProtocol('opencode-zen', 'kimi-k2.6'), 'openai-chat')
 })
 
-test('OpenCode Go 和 Zen 的 Chat Completions 模型使用完整响应缓冲', () => {
-  assert.equal(shouldBufferOpenCodeChat('opencode-go', 'deepseek-v4-flash'), true)
-  assert.equal(shouldBufferOpenCodeChat('opencode-go', 'grok-4.5'), true)
-  assert.equal(shouldBufferOpenCodeChat('opencode-go', 'gpt-5.6-luna'), false)
-  assert.equal(shouldBufferOpenCodeChat('opencode-go', 'qwen3.8-max'), false)
-  assert.equal(shouldBufferOpenCodeChat('opencode-zen', 'deepseek-v4-flash-free'), true)
-  assert.equal(shouldBufferOpenCodeChat('opencode-zen', 'kimi-k2.6'), true)
-  assert.equal(shouldBufferOpenCodeChat('opencode-zen', 'gpt-5.6-sol'), false)
-  assert.equal(shouldBufferOpenCodeChat('opencode-zen', 'claude-sonnet-4-6'), false)
-  assert.equal(shouldBufferOpenCodeChat('deepseek', 'deepseek-chat'), false)
+test('OpenCode Chat 模型降级为无工具的普通流式请求', () => {
+  assert.equal(providerSupportsTools('opencode-zen', 'deepseek-v4-flash-free'), false)
+  assert.equal(providerSupportsTools('opencode-zen', 'claude-sonnet-4-6'), true)
+  assert.equal(providerSupportsTools('openai-compatible', 'deepseek-v4-flash-free'), true)
 })

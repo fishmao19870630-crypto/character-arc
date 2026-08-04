@@ -123,9 +123,16 @@ export function isOpenAIChatProtocol(provider: string, model = ''): boolean {
   return resolveAiProviderProtocol(provider, model) === 'openai-chat'
 }
 
-export function shouldBufferOpenCodeChat(provider: string, model = ''): boolean {
-  return isOpenCodeProvider(provider)
-    && isOpenAIChatProtocol(provider, model)
+/**
+ * 判断当前模型是否适合走带 tools 的 Agent loop。
+ * OpenCode 的 Chat Completions 模型并不统一支持 tools；这类模型仍可像
+ * OpenFic 一样稳定执行普通 Chat Completions，因此应降级到单次流式请求。
+ */
+export function providerSupportsTools(provider: string, model = ''): boolean {
+  const normalizedProvider = provider.trim().toLowerCase()
+  if (normalizedProvider === 'ollama' || normalizedProvider === 'deepseek') return false
+  if (isOpenCodeProvider(normalizedProvider) && isOpenAIChatProtocol(normalizedProvider, model)) return false
+  return true
 }
 
 export function isSupportedProviderModel(provider: string, model: string): boolean {

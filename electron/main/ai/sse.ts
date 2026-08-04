@@ -40,10 +40,20 @@ export function isTerminalSseEvent(event: string): boolean {
     if (data === '[DONE]') return true
     if (!data.startsWith('{')) continue
     try {
-      const parsed = JSON.parse(data) as { type?: unknown }
+      const parsed = JSON.parse(data) as {
+        type?: unknown
+        finish_reason?: unknown
+        choices?: Array<{ finish_reason?: unknown }>
+      }
       if (typeof parsed.type === 'string' && TERMINAL_SSE_EVENT_TYPES.has(parsed.type.toLowerCase())) {
         return true
       }
+      // OpenAI Chat Completions 的最终数据帧已经携带 finish_reason。
+      // 部分兼容网关随后直接关闭连接，不再补发 `data: [DONE]`。
+      if (typeof parsed.finish_reason === 'string' && parsed.finish_reason.trim()) return true
+      if (parsed.choices?.some((choice) => (
+        typeof choice.finish_reason === 'string' && choice.finish_reason.trim().length > 0
+      ))) return true
     } catch {
       // 非 JSON data 不是已知终止事件。
     }
@@ -84,39 +94,44 @@ export function createTerminalAwareSseStream(
       if (settled) return
 
       try {
-        const { done, value } = await readStreamChunkWithIdleTimeout(reader, idleTimeoutMs)
-        if (settled) return
+        // 一个 SSE event 可能被拆成多个很小的网络 chunk。若尚未读到事件分隔符，
+        // 必须在本次 pull 内继续读取；直接返回且没有 enqueue 会令下游永久停住。
+        while (!settled) {
+          const { done, value } = await readStreamChunkWithIdleTimeout(reader, idleTimeoutMs)
+          if (settled) return
 
-        buffer += done
-          ? decoder.decode()
-          : decoder.decode(value, { stream: true })
+          buffer += done
+            ? decoder.decode()
+            : decoder.decode(value, { stream: true })
 
-        const split = splitCompleteSseEvents(buffer)
-        const completeEvents = [...split.events]
-        let remainder = split.remainder
+          const split = splitCompleteSseEvents(buffer)
+          const completeEvents = [...split.events]
+          let remainder = split.remainder
 
-        // A few gateways omit the final blank line. Accept an otherwise complete
-        // terminal marker, but never accept an unterminated content event.
-        if (done && remainder && isTerminalSseEvent(remainder)) {
-          completeEvents.push(remainder)
-          remainder = ''
-        }
+          // A few gateways omit the final blank line. Accept an otherwise complete
+          // terminal marker, but never accept an unterminated content event.
+          if (done && remainder && isTerminalSseEvent(remainder)) {
+            completeEvents.push(remainder)
+            remainder = ''
+          }
 
-        const batch = takeSseEventsThroughTerminal(completeEvents)
-        const output = batch.events.map(transformEvent).join('')
-        if (output) controller.enqueue(encoder.encode(output))
+          const batch = takeSseEventsThroughTerminal(completeEvents)
+          const output = batch.events.map(transformEvent).join('')
+          if (output) controller.enqueue(encoder.encode(output))
 
-        if (batch.terminalSeen) {
-          settled = true
-          buffer = ''
-          controller.close()
-          void reader.cancel('terminal SSE event received').catch(() => {})
-          return
-        }
+          if (batch.terminalSeen) {
+            settled = true
+            buffer = ''
+            controller.close()
+            void reader.cancel('terminal SSE event received').catch(() => {})
+            return
+          }
 
-        buffer = remainder
-        if (done) {
-          throw new AiStreamProtocolError()
+          buffer = remainder
+          if (done) {
+            throw new AiStreamProtocolError()
+          }
+          if (output) return
         }
       } catch (error) {
         if (settled) return

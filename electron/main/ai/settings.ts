@@ -114,7 +114,7 @@ export function resolveMaxTokens(task?: AiTaskPayload): number | undefined {
     case 'chapter-scene-plan':
       return 400
     case 'chapter-first-draft':
-      return undefined
+      return resolveChapterDraftMaxTokens(task)
     case 'global-assistant':
       return 1400
     case 'global-assistant-proposal':
@@ -135,6 +135,16 @@ export function resolveMaxTokens(task?: AiTaskPayload): number | undefined {
     default:
       return undefined
   }
+}
+
+/**
+ * OpenCode 免费推理模型对不设上限的长文本请求可能长时间只输出 reasoning，
+ * 在正文开始前撞上网关连接时限。这里按目标字数预留正文和简短推理预算。
+ */
+export function resolveChapterDraftMaxTokens(task: AiTaskPayload): number {
+  const targetWordCount = Number(task.context.targetWordCount ?? task.context.chapterWordTarget)
+  if (!Number.isFinite(targetWordCount) || targetWordCount <= 0) return 16_000
+  return Math.min(32_000, Math.max(16_000, Math.ceil(targetWordCount * 4)))
 }
 
 /**

@@ -57,6 +57,9 @@ test('识别兼容接口的流式终止事件，不依赖上游关闭连接', ()
   assert.equal(isTerminalSseEvent('event: message_stop\ndata: {"type":"message_stop"}\n\n'), true)
   assert.equal(isTerminalSseEvent('event: response.completed\ndata: {"type":"response.completed"}\n\n'), true)
   assert.equal(isTerminalSseEvent('data: {"type":"response.failed"}\n\n'), true)
+  assert.equal(isTerminalSseEvent('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'), true)
+  assert.equal(isTerminalSseEvent('data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n'), true)
+  assert.equal(isTerminalSseEvent('data: {"choices":[{"delta":{"content":"继续"},"finish_reason":null}]}\n\n'), false)
   assert.equal(isTerminalSseEvent('event: content_block_delta\ndata: {"type":"content_block_delta"}\n\n'), false)
 })
 
@@ -97,6 +100,38 @@ test('收到终止事件后完整转发正文且不等待上游关闭连接', as
   assert.match(output, /"delta":"好，完整回答"/)
   assert.match(output, /"type":"response.completed"/)
   assert.equal(upstreamCanceled, true)
+})
+
+test('SSE 事件跨多个网络分片时继续读取直到事件完整', async () => {
+  const encoder = new TextEncoder()
+  const source = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"con'))
+      controller.enqueue(encoder.encode('tent":"分片正文"}}]}'))
+      controller.enqueue(encoder.encode('\n\ndata: [DO'))
+      controller.enqueue(encoder.encode('NE]\n\n'))
+    }
+  })
+
+  const output = await new Response(createTerminalAwareSseStream(source, 100)).text()
+
+  assert.match(output, /分片正文/)
+  assert.match(output, /\[DONE\]/)
+})
+
+test('Chat Completions 有 finish_reason 时不强制等待 DONE', async () => {
+  const encoder = new TextEncoder()
+  const source = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"完整正文"},"finish_reason":null}]}\n\n'))
+      controller.enqueue(encoder.encode('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'))
+    }
+  })
+
+  const output = await new Response(createTerminalAwareSseStream(source, 100)).text()
+
+  assert.match(output, /完整正文/)
+  assert.match(output, /"finish_reason":"stop"/)
 })
 
 test('上游未发送终止事件时拒绝把部分正文标记为完成', async () => {

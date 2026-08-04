@@ -1,10 +1,9 @@
-import { generateText, streamText, stepCountIs, dynamicTool, jsonSchema } from 'ai'
+import { streamText, stepCountIs, dynamicTool, jsonSchema } from 'ai'
 import { buildSystemPrompt, createModel } from '../provider'
 import type { AiRunUsage, AppSettings, AiAgentStreamHandlers, ToolCallTrace } from '../shared-types'
 import type { Tool, ToolContext } from './tools/types'
 import { stripReasoningMarkup } from '../reasoning'
 import { isAiStreamIdleTimeoutError } from '../sse'
-import { shouldBufferOpenCodeChat } from '@shared/ai-provider-catalog'
 
 export type RunAgentParams = {
   settings: AppSettings
@@ -130,39 +129,6 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
     stepCount++
     if (stepCount < maxSteps) {
       params.handlers.onAgentStatus(`第 ${stepCount + 1} 轮推理...`, stepCount + 1, maxSteps)
-    }
-  }
-
-  if (shouldBufferOpenCodeChat(params.settings.provider, params.settings.model)) {
-    const bufferedResult = await generateText({
-      model: createModel(params.settings, undefined, { buffered: true }),
-      system: buildSystemPrompt(params.settings, params.systemPrompt),
-      prompt: params.userPrompt,
-      ...(params.disableTools ? {} : { tools: sdkTools, stopWhen: stepCountIs(maxSteps) }),
-      maxOutputTokens: params.maxTokens,
-      abortSignal: params.ctx.signal,
-      experimental_onToolCallStart: onToolCallStart,
-      experimental_onToolCallFinish: onToolCallFinish,
-      onStepFinish
-    })
-    const finalText = stripReasoningMarkup(bufferedResult.text)
-    if (finalText) params.handlers.onTextDelta(finalText)
-    const usage = toUsage(bufferedResult.totalUsage)
-
-    if (!finalText.trim() && bufferedResult.finishReason === 'length') {
-      throw new Error('模型输出被截断（finish_reason=length），未产生可见回复。请提高输出上限后重试。')
-    }
-    if (!finalText.trim() && bufferedResult.finishReason === 'tool-calls') {
-      throw new Error(
-        `Agent 在 ${maxSteps} 步内未能产出最终答案（工具调用次数达上限）。请简化请求，或在设置中提高步数上限后重试。`
-      )
-    }
-
-    return {
-      finalText,
-      toolCalls,
-      iterations: stepCount,
-      usage: Object.values(usage).some((value) => value !== undefined) ? usage : undefined
     }
   }
 

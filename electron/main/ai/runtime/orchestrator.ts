@@ -29,6 +29,7 @@ import type { StateDelta } from '../../story-state-store'
 import { indexChapterSegments } from '../knowledge-retrieval'
 import { runLightCheck } from '../audit/light-check'
 import { formatAiErrorMessage } from '../error-message'
+import { isOpenCodeProvider, isOpenAIChatProtocol } from '@shared/ai-provider-catalog'
 import { createHash, randomUUID } from 'node:crypto'
 import { BackgroundTaskCoordinator } from './background-task-coordinator'
 import {
@@ -258,9 +259,15 @@ export async function streamAiTask(
 
   const input = buildPromptInput(task, skills, knowledgeContext)
   const prompt = taskHandler.buildPrompt(input)
-  const maxTokens = shouldOmitMaxTokens(task.task)
-    ? undefined
-    : applyReasoningSafeFloor(taskHandler.resolveMaxTokens?.(input) ?? resolveMaxTokens(task))
+  const isOpenCodeDraft = task.task === 'chapter-first-draft'
+    && isOpenCodeProvider(settings.provider)
+    && isOpenAIChatProtocol(settings.provider, settings.model)
+  const taskMaxTokens = taskHandler.resolveMaxTokens?.(input) ?? resolveMaxTokens(task)
+  const maxTokens = isOpenCodeDraft
+    ? taskMaxTokens
+    : shouldOmitMaxTokens(task.task)
+      ? undefined
+      : applyReasoningSafeFloor(taskMaxTokens)
   const structuredSchema = taskHandler.outputType === 'json' ? getStructuredTaskSchema(taskHandler.name) : undefined
 
   if (taskHandler.outputType === 'json' && !structuredSchema) {

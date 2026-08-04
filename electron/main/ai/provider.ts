@@ -1,5 +1,6 @@
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import type { LanguageModel } from 'ai'
 import type { AppSettings } from './shared-types'
 import { isAnthropicProtocol, resolveAiProviderProtocol } from '@shared/ai-provider-catalog'
@@ -127,31 +128,37 @@ export function createReasoningInterceptedFetch(
   }
 }
 
-function createOpenAICompatibleProvider(settings: AppSettings, customFetch?: typeof fetch) {
+function createOpenAIProvider(settings: AppSettings, customFetch?: typeof fetch) {
   const apiKey = settings.apiKey.trim()
 
   return createOpenAI({
     apiKey: apiKey || undefined,
     baseURL: settings.baseUrl || undefined,
-    name: isOllamaProvider(settings) ? 'ollama' : undefined,
+    fetch: customFetch
+  })
+}
+
+function createChatCompletionsProvider(settings: AppSettings, customFetch?: typeof fetch) {
+  const apiKey = settings.apiKey.trim()
+
+  return createOpenAICompatible({
+    name: isOllamaProvider(settings) ? 'ollama' : settings.provider,
+    apiKey: apiKey || undefined,
+    baseURL: settings.baseUrl || 'https://api.openai.com/v1',
     fetch: customFetch
   })
 }
 
 export function createModel(
   settings: AppSettings,
-  onReasoningDelta?: (delta: string) => void,
-  options?: { buffered?: boolean }
+  onReasoningDelta?: (delta: string) => void
 ): LanguageModel {
   const requestFetch = createProxyFetch(settings.proxyUrl)
-  const configuredTimeoutMs = Math.max(30_000, (settings.aiTimeoutSeconds ?? 180) * 1000)
   const customFetch = createReasoningInterceptedFetch(
     onReasoningDelta,
     requestFetch,
     resolveStreamIdleTimeoutMs(settings),
-    options?.buffered
-      ? configuredTimeoutMs
-      : Math.min(DEFAULT_RESPONSE_START_TIMEOUT_MS, resolveStreamIdleTimeoutMs(settings))
+    Math.min(DEFAULT_RESPONSE_START_TIMEOUT_MS, resolveStreamIdleTimeoutMs(settings))
   )
   if (isAnthropicProtocol(settings.provider, settings.model)) {
     const anthropic = createAnthropic({
@@ -162,22 +169,33 @@ export function createModel(
     return anthropic(settings.model)
   }
 
-  const openai = createOpenAICompatibleProvider(settings, customFetch)
   if (shouldUseOpenAIResponses(settings)) {
+    const openai = createOpenAIProvider(settings, customFetch)
     return openai(settings.model)
   }
 
-  return openai.chat(settings.model)
+  const compatible = createChatCompletionsProvider(settings, customFetch)
+  return compatible.chatModel(settings.model)
+}
+
+function buildRuntimeModelIdentity(settings: AppSettings): string {
+  return [
+    '【运行时模型信息】',
+    `当前请求配置的供应商标识：${settings.provider}`,
+    `当前请求配置的模型标识：${settings.model}`,
+    '如果用户询问“你是什么模型”或类似问题，只能依据这里的运行时模型标识回答。不要沿用历史对话中其他模型的自我介绍，也不要把自己说成 Claude 或 Anthropic，除非这里的模型标识明确是 Claude。'
+  ].join('\n')
 }
 
 export function buildSystemPrompt(settings: AppSettings, systemPrompt: string) {
+  const promptWithIdentity = `${systemPrompt}\n\n${buildRuntimeModelIdentity(settings)}`
   if (!isAnthropicProtocol(settings.provider, settings.model)) {
-    return systemPrompt
+    return promptWithIdentity
   }
 
   return {
     role: 'system' as const,
-    content: systemPrompt,
+    content: promptWithIdentity,
     providerOptions: {
       anthropic: {
         cacheControl: ANTHROPIC_PROMPT_CACHE

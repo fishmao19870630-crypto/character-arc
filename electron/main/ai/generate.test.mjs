@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { resolveProviderOptions } from './request-options.ts'
+import { isOpenCodeReasoningChatModel, resolveProviderOptions } from './request-options.ts'
 
 const baseSettings = {
   apiKey: 'test-key',
@@ -31,4 +31,21 @@ test('只有官方 OpenAI 推理模型使用 reasoning_effort none', () => {
     provider: 'openai-compatible',
     model: 'gpt-5.2'
   }, { disableReasoning: true }), undefined)
+})
+
+test('OpenCode 已知推理模型的流式请求使用低推理强度', () => {
+  const settings = {
+    ...baseSettings,
+    provider: 'opencode-zen',
+    model: 'deepseek-v4-flash-free'
+  }
+  assert.equal(isOpenCodeReasoningChatModel(settings), true)
+  assert.deepEqual(resolveProviderOptions(settings, { preferLowReasoning: true }), {
+    openaiCompatible: { reasoningEffort: 'low' }
+  })
+
+  assert.equal(isOpenCodeReasoningChatModel({
+    ...settings,
+    model: 'ling-3.0-flash-free'
+  }), false)
 })

@@ -19,6 +19,7 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.78",
     "@ai-sdk/openai": "^3.0.64",
+    "@ai-sdk/openai-compatible": "^2.0.63",
     "@node-rs/jieba": "^2.0.1",
     "@tiptap/core": "^3.22.5",
     "@tiptap/extension-character-count": "^3.22.5",

@@ -6,6 +6,7 @@ import type { AiRunUsage, AppSettings, AiStreamHandlers, PromptPair } from './sh
 import { stripReasoningMarkup } from './reasoning'
 import { isOpenAIReasoningChatModel, resolveProviderOptions } from './request-options'
 import { isAnthropicProtocol, isOpenAIChatProtocol } from '@shared/ai-provider-catalog'
+import { AiStreamProtocolError } from './sse'
 
 function useStreamFallback(settings: AppSettings): boolean {
   return isAnthropicProtocol(settings.provider, settings.model)
@@ -33,6 +34,7 @@ function resolveSamplingOptions(settings: AppSettings): { temperature?: number; 
 export type AiGenerateOptions = {
   schema?: ZodTypeAny
   disableReasoning?: boolean
+  preferLowReasoning?: boolean
   forceNonStreaming?: boolean
 }
 
@@ -204,7 +206,7 @@ export async function aiStreamTextWithUsage(
   signal: AbortSignal,
   maxTokens?: number
 ): Promise<AiTextGenerationResult> {
-  const providerOptions = resolveProviderOptions(settings)
+  const providerOptions = resolveProviderOptions(settings, { preferLowReasoning: true })
   const samplingOptions = resolveSamplingOptions(settings)
   let streamError: unknown = null
   // 推理模型（mimo / deepseek-r1 / 智谱 GLM-Z1 等）通过非标准 reasoning_content 字段
@@ -222,16 +224,39 @@ export async function aiStreamTextWithUsage(
   let full = ''
   // 推理模型（如 mimo、deepseek-r1）会先输出 reasoning，再输出正文。
   // 走 fullStream 才能拿到 reasoning-delta，让思考过程实时可见，否则首字前界面长时间无反馈。
-  for await (const part of result.fullStream) {
-    if (part.type === 'reasoning-delta') {
-      handlers.onReasoningDelta?.(part.text)
-    } else if (part.type === 'text-delta') {
-      full += part.text
-      handlers.onTextDelta(part.text)
-    } else if (part.type === 'error') {
-      // fullStream 把流式错误作为 error part 发出而不抛异常，必须显式抛出
-      throw part.error
+  try {
+    for await (const part of result.fullStream) {
+      if (part.type === 'reasoning-delta') {
+        handlers.onReasoningDelta?.(part.text)
+      } else if (part.type === 'text-delta') {
+        full += part.text
+        handlers.onTextDelta(part.text)
+      } else if (part.type === 'error') {
+        // fullStream 把流式错误作为 error part 发出而不抛异常，必须显式抛出
+        throw part.error
+      }
     }
+  } catch (error) {
+    // OpenCode 偶尔在推理阶段直接关闭 SSE，且没有任何可见正文。
+    // 用一次非流式请求恢复；已有正文时不重试，避免重复拼接半章内容。
+    if (error instanceof AiStreamProtocolError && !full.trim() && !signal.aborted) {
+      try {
+        const fallback = await aiGenerateTextWithUsage(
+          settings,
+          prompt,
+          maxTokens,
+          signal,
+          { forceNonStreaming: true, preferLowReasoning: true }
+        )
+        if (fallback.text.trim()) {
+          handlers.onTextDelta(fallback.text)
+          return fallback
+        }
+      } catch {
+        // 保留原始协议错误，避免把兜底请求的内部细节误报成首因。
+      }
+    }
+    throw error
   }
   if (streamError) throw streamError
   // 某些中转站对非 Claude 模型会把文本放在 reasoning/thinking blocks 里，
@@ -242,6 +267,17 @@ export async function aiStreamTextWithUsage(
       full = fallbackText
       handlers.onTextDelta(fallbackText)
     }
+  }
+  const finishReason = await result.finishReason
+  if (finishReason === 'length') {
+    throw new Error(
+      full.trim()
+        ? '模型输出达到上限，章节正文尚未完整生成。请缩短目标字数或改用输出能力更强的模型。'
+        : '模型把输出预算耗在了推理阶段，尚未生成章节正文。请改用非推理模型或稍后重试。'
+    )
+  }
+  if (!full.trim()) {
+    throw new Error('模型已结束响应，但没有生成可见正文。请改用非推理模型或稍后重试。')
   }
   return {
     text: stripReasoningMarkup(full),
@@ -270,7 +306,7 @@ export async function aiStreamObjectWithUsage(
     schema,
     maxOutputTokens: maxTokens,
     ...samplingOptions,
-    providerOptions: resolveProviderOptions(settings),
+    providerOptions: resolveProviderOptions(settings, { preferLowReasoning: true }),
     abortSignal: signal,
     onError: ({ error }) => { streamError = error }
   })
