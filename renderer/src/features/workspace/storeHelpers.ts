@@ -230,7 +230,7 @@ export function normalizeReferenceWorks(works?: ReferenceWorkItem[] | null): Ref
 // 默认应用设置：5分钟自动保存，API 信息由用户在设置中填写
 export const defaultAppSettings: AppSettings = {
   provider: 'deepseek',
-  model: 'deepseek-chat',
+  model: '',
   apiKey: '',
   baseUrl: 'https://api.deepseek.com/v1',
   apiProtocol: 'auto',

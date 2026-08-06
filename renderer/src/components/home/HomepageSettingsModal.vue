@@ -376,7 +376,7 @@ async function handleTestAiConnection(): Promise<void> {
     if (!result.success) throw new Error(result.error ?? '模型连接测试失败')
     const res = result.result as { provider?: string; model?: string; protocol?: string } | undefined
     message.success(
-      `模型与工具调用测试成功：${res?.provider ?? payload.provider} / ${res?.model ?? payload.model} / ${res?.protocol ?? 'auto'}`
+      `模型连接测试成功：${res?.provider ?? payload.provider} / ${res?.model ?? payload.model} / ${res?.protocol ?? 'auto'}`
     )
   } catch (error) {
     message.error(error instanceof Error ? error.message : '模型连接测试失败')

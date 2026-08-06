@@ -10,19 +10,19 @@ import {
   shouldTryStreamingAgent
 } from '../../shared/ai-provider-catalog.ts'
 
-test('厂商预设会补齐默认地址和推荐模型', () => {
+test('厂商预设会补齐默认地址并保持模型为空', () => {
   const preset = getAiProviderCatalogEntry('deepseek')
 
   assert.equal(preset?.baseUrl, 'https://api.deepseek.com/v1')
-  assert.equal(preset?.model, 'deepseek-chat')
+  assert.equal(preset?.model, '')
   assert.equal(preset?.supportsEmbedding, false)
 })
 
-test('OpenCode Go 厂商预设使用官方 Go 地址和推荐模型', () => {
+test('OpenCode Go 厂商预设使用官方 Go 地址并保持模型为空', () => {
   const preset = getAiProviderCatalogEntry('opencode-go')
 
   assert.equal(preset?.baseUrl, 'https://opencode.ai/zen/go/v1')
-  assert.equal(preset?.model, 'deepseek-v4-flash')
+  assert.equal(preset?.model, '')
   assert.equal(preset?.supportsEmbedding, false)
 })
 

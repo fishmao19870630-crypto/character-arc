@@ -385,7 +385,7 @@ function ensureAppSettingsColumns(db: DatabaseSync): void {
   const columnNames = new Set(columns.map((column) => column.name))
 
   if (!columnNames.has('model')) {
-    db.exec(`ALTER TABLE app_settings ADD COLUMN model TEXT NOT NULL DEFAULT 'deepseek-chat';`)
+    db.exec(`ALTER TABLE app_settings ADD COLUMN model TEXT NOT NULL DEFAULT '';`)
   }
 
   if (!columnNames.has('ui_scale')) {

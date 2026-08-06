@@ -36,8 +36,7 @@ import {
 } from '@shared/ai-provider-catalog'
 import { createHash, randomUUID } from 'node:crypto'
 import { BackgroundTaskCoordinator } from './background-task-coordinator'
-import { generateText, tool } from 'ai'
-import { z } from 'zod'
+import { generateText } from 'ai'
 import {
   beginChapterProcessing,
   finishChapterProcessing,
@@ -394,41 +393,24 @@ export async function testAiConnection(rawSettings: AppSettings): Promise<{
   provider: string
   model: string
   protocol: string
-  tools: true
 }> {
   const settings = normalizeSettings(rawSettings)
   validateSettings(settings)
   const probePrompt = {
-    system: 'You are a connectivity probe. Call the required tool exactly once.',
-    user: 'Call characterarc_connection_probe now.'
+    system: 'You are a connectivity probe. Reply briefly to confirm the request succeeded.',
+    user: 'Reply with CONNECTED.'
   }
   logPrompt('TEST', settings, probePrompt, 'test-connection')
-  let toolExecuted = false
   await generateText({
     model: createModel(settings),
     system: buildSystemPrompt(settings, probePrompt.system),
     prompt: probePrompt.user,
-    tools: {
-      characterarc_connection_probe: tool({
-        description: 'CharacterArc connection capability probe.',
-        inputSchema: z.object({}),
-        execute: async () => {
-          toolExecuted = true
-          return 'CONNECTED'
-        }
-      })
-    },
-    toolChoice: { type: 'tool', toolName: 'characterarc_connection_probe' },
     maxOutputTokens: 4096
   })
-  if (!toolExecuted) {
-    throw new Error('模型连接成功，但没有返回标准工具调用。请检查 API 协议设置。')
-  }
   return {
     provider: settings.provider,
     model: settings.model,
-    protocol: resolveAiProviderProtocol(settings.provider, settings.model, settings.apiProtocol),
-    tools: true
+    protocol: resolveAiProviderProtocol(settings.provider, settings.model, settings.apiProtocol)
   }
 }
 

@@ -7,7 +7,7 @@ import {
 } from '@shared/ai-provider-catalog'
 
 /**
- * 根据供应商名称返回其默认 Base URL 和推荐模型。
+ * 根据供应商名称返回其默认 Base URL 和默认模型（当前保持为空）。
  * 用于用户未手动填写时的兜底值。
  *
  * @param provider - 供应商标识（如 'openai'、'deepseek'）
