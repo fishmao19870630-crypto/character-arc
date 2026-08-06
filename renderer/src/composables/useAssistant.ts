@@ -242,6 +242,7 @@ export function useAssistant(options: UseAssistantOptions) {
           appendStaged(evt.changeId, evt.seq)
           break
         case 'resumable':
+          if (options.surface.scope === 'project') break
           resumable = {
             label: evt.label,
             prompt: evt.prompt,

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { AgentLoopCore } from './agent-loop-core.ts'
+import { createEvidenceLedger, wrapToolsWithRuntimeBudget } from './evidence-ledger.ts'
+import { createRuntimePlan } from './planner.ts'
 import { StagedChangesStore } from './staged-changes-store.ts'
 
 function makeConversation() {
@@ -53,6 +55,38 @@ function makeLoop(runAgentImpl) {
   )
   return { loop, conversation, pushedEvents }
 }
+
+test('项目级全局助手不设置工具次数预算或自动续批', async () => {
+  const surface = {
+    id: 'global-page',
+    scope: 'project',
+    autoCommit: false,
+    maxSteps: 8
+  }
+  const plan = createRuntimePlan({
+    surface,
+    request: {
+      sessionId: 'session-1',
+      surface,
+      userMessage: '请完整审计整个项目的所有设定'
+    }
+  })
+  const ledger = createEvidenceLedger()
+  const [tool] = wrapToolsWithRuntimeBudget([{
+    definition: { name: 'read_project_data' },
+    handler: async () => ({ content: 'ok' })
+  }], plan, ledger)
+
+  for (let index = 0; index < 10; index += 1) {
+    assert.equal((await tool.handler({}, {})).content, 'ok')
+  }
+
+  assert.equal(plan.enforceToolBudgets, false)
+  assert.equal(plan.requiresBatching, false)
+  assert.doesNotMatch(plan.guidance, /每批读取预算有限/)
+  assert.equal(ledger.snapshot().readCalls, 10)
+  assert.equal(ledger.snapshot().budgetExhausted, false)
+})
 
 test('模型没有最终可见文本时将 turn 标记为 error', async () => {
   const { loop, conversation, pushedEvents } = makeLoop(async () => ({
