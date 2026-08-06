@@ -6,6 +6,25 @@ import { resolveWritingStyleInstruction } from '../prompts/shared'
 import { resolveProjectBootstrapPromptParts } from '../prompts/bootstrap-strategies'
 import { normalizeWorldviewType } from './worldview-type'
 
+function normalizeChapterTitle(value: unknown, index: number): string {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  const withoutPrefix = raw
+    .replace(/^\s*第[^章]{1,12}章\s*[:：、.．-]?\s*/u, '')
+    .replace(/^\s*\d+\s*[.．、:：-]\s*/u, '')
+  return `第${index + 1}章：${withoutPrefix || '剧情节拍'}`
+}
+
+function normalizeChapterWordTarget(value: unknown, novelLength: unknown): string {
+  const isShort = novelLength === 'short'
+  const minimum = isShort ? 1800 : 3000
+  const maximum = isShort ? 2800 : 4000
+  const fallback = isShort ? 2000 : 3000
+  const matched = String(value ?? '').replace(/,/g, '').match(/\d+/)
+  const parsed = matched ? Number(matched[0]) : fallback
+  const clamped = Math.min(maximum, Math.max(minimum, Number.isFinite(parsed) ? parsed : fallback))
+  return String(Math.round(clamped / 100) * 100)
+}
+
 /** 螺旋展开任务：基于核心骨架展开配角、大纲节拍和补充世界设定 */
 const handler: TaskHandler = {
   name: 'spiral-expand',
@@ -15,6 +34,7 @@ const handler: TaskHandler = {
     const { context, capabilityPreamble } = input
     const writingStyle = resolveWritingStyleInstruction(context)
     const { genreLabel, lengthLabel, strategyBlock } = resolveProjectBootstrapPromptParts(context)
+    const wordTargetRange = context.projectNovelLength === 'short' ? '1800 到 2800' : '3000 到 4000'
     const seedResult = context.spiralSeedResult as SpiralSeedResult | undefined
     const seedBlock = seedResult
       ? `主角：${seedResult.protagonist.name}
@@ -43,7 +63,7 @@ ${seedBlock}
 请基于以上核心骨架，展开以下内容：
 
 1. supportingCharacters：2-3个配角，每个包含 name、role（短语定位）、relationToProtagonist（与主角的关系和冲突点）、motivation（自身动机，不能只是服务主角）
-2. outlineBeats：3-5个大纲节拍，每个包含 title、conflict（本节拍的核心冲突）、characterDriven（哪个角色的什么选择驱动了这段情节）、summary、wordTarget（"预估 xxxx字"格式）
+2. outlineBeats：3-5个开篇章节大纲，每个包含 title、conflict（本章核心冲突）、characterDriven（哪个角色的什么选择驱动了本章）、summary、wordTarget（纯数字）。title 必须使用“第N章：章节名”格式，从第1章开始连续编号；每章预估字数必须控制在${wordTargetRange}字，不得使用整卷或全书字数。
 3. expandedWorldview：1-2条补充世界设定，服务于配角动机或大纲冲突需要
 
 关键原则：
@@ -56,7 +76,7 @@ ${seedBlock}
 返回格式：{"supportingCharacters":[{"name":"","role":"","relationToProtagonist":"","motivation":""}],"outlineBeats":[{"title":"","conflict":"","characterDriven":"","summary":"","wordTarget":""}],"expandedWorldview":[{"type":"","title":"","content":""}]}`
     }
   },
-  normalize(raw: string): AiTaskResult {
+  normalize(raw: string, context?: Record<string, unknown>): AiTaskResult {
     const parsed = extractJsonObject(raw) as Partial<SpiralExpandResult>
     const supportingCharacters = Array.isArray(parsed.supportingCharacters)
       ? parsed.supportingCharacters.slice(0, 3).map((c) => ({
@@ -67,12 +87,12 @@ ${seedBlock}
         }))
       : []
     const outlineBeats = Array.isArray(parsed.outlineBeats)
-      ? parsed.outlineBeats.slice(0, 5).map((b) => ({
-          title: b.title?.trim() || '剧情节拍',
+      ? parsed.outlineBeats.slice(0, 5).map((b, index) => ({
+          title: normalizeChapterTitle(b.title, index),
           conflict: b.conflict?.trim() || '待设定',
           characterDriven: b.characterDriven?.trim() || '待设定',
           summary: b.summary?.trim() || '待设定',
-          wordTarget: b.wordTarget?.trim() || '预估 3000字'
+          wordTarget: normalizeChapterWordTarget(b.wordTarget, context?.projectNovelLength)
         }))
       : []
     const expandedWorldview = Array.isArray(parsed.expandedWorldview)

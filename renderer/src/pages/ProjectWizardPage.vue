@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
-import { ArrowLeft, BookA, CheckCircle2, ChevronRight, Info, Sparkles } from 'lucide-vue-next'
-import { NButton, NInput, useMessage } from 'naive-ui'
+import { ArrowLeft, BookA, CheckCircle2, ChevronRight, Info, LoaderCircle, Sparkles, X } from 'lucide-vue-next'
+import { NButton, NInput, NModal, NProgress, useMessage } from 'naive-ui'
 import { useAppStore } from '@/stores/app'
 import { toIpcPayload } from '@/utils/ipcPayload'
 import {
@@ -26,6 +26,7 @@ const message = useMessage()
 
 const step = ref(1)
 const isGenerating = ref(false)
+const isCancelling = ref(false)
 
 type GenerationMode = 'off' | 'quick' | 'deep'
 
@@ -39,6 +40,7 @@ const formData = reactive({
 })
 
 const spiralPhase = ref<'idle' | 'seed' | 'expand' | 'validate'>('idle')
+const spiralPhaseStatus = ref<'idle' | 'running' | 'done' | 'error'>('idle')
 const spiralPhaseLabels: Record<string, string> = {
   idle: '',
   seed: '正在提炼核心骨架（主角矛盾 + 主线方向 + 世界规则）...',
@@ -77,6 +79,18 @@ const creationModeLabel = computed(() => {
   return '空白项目'
 })
 const spiralPhaseLabel = computed(() => spiralPhaseLabels[spiralPhase.value] || '')
+const generationProgress = computed(() => {
+  if (formData.generationMode !== 'deep') return 36
+  if (spiralPhase.value === 'seed') return spiralPhaseStatus.value === 'done' ? 34 : 16
+  if (spiralPhase.value === 'expand') return spiralPhaseStatus.value === 'done' ? 68 : 50
+  if (spiralPhase.value === 'validate') return spiralPhaseStatus.value === 'done' ? 100 : 82
+  return 6
+})
+const generationStageLabel = computed(() => {
+  if (formData.generationMode !== 'deep') return '正在生成项目骨架...'
+  if (spiralPhaseStatus.value === 'error') return `${spiralPhaseLabel.value || '当前阶段'}未完成，将使用可用结果继续。`
+  return spiralPhaseLabel.value || '正在准备生成任务...'
+})
 
 const canContinue = computed(() => {
   if (step.value === 1) {
@@ -91,7 +105,9 @@ const canContinue = computed(() => {
 function resetWizard(): void {
   step.value = 1
   isGenerating.value = false
+  isCancelling.value = false
   spiralPhase.value = 'idle'
+  spiralPhaseStatus.value = 'idle'
   formData.title = ''
   formData.selectedGenreKey = DEFAULT_PROJECT_GENRE_KEY
   formData.customGenre = ''
@@ -112,9 +128,10 @@ function goBack(): void {
 }
 
 async function cancelGeneration(): Promise<void> {
-  if (formData.generationMode === 'deep') {
-    await window.characterArc.cancelSpiralBootstrap()
-  }
+  if (formData.generationMode !== 'deep') return
+  if (isCancelling.value) return
+  isCancelling.value = true
+  await window.characterArc.cancelSpiralBootstrap()
 }
 
 function selectGenre(genreKey: string): void {
@@ -142,7 +159,9 @@ async function goNext(): Promise<void> {
   }
 
   isGenerating.value = true
+  isCancelling.value = false
   spiralPhase.value = 'idle'
+  spiralPhaseStatus.value = 'idle'
 
   const wizardValues = {
     title: formData.title,
@@ -156,6 +175,7 @@ async function goNext(): Promise<void> {
     if (formData.generationMode === 'deep') {
       const cleanup = window.characterArc.onSpiralProgress((event) => {
         spiralPhase.value = event.phase
+        spiralPhaseStatus.value = event.status
       })
 
       try {
@@ -206,10 +226,15 @@ async function goNext(): Promise<void> {
 
     resetWizard()
   } catch (error) {
-    message.error(error instanceof Error ? error.message : '创建项目失败，请稍后重试')
+    const errorMessage = error instanceof Error ? error.message : '创建项目失败，请稍后重试'
+    if (!isCancelling.value && !errorMessage.includes('已取消')) {
+      message.error(errorMessage)
+    }
   } finally {
     isGenerating.value = false
+    isCancelling.value = false
     spiralPhase.value = 'idle'
+    spiralPhaseStatus.value = 'idle'
   }
 }
 </script>
@@ -393,21 +418,6 @@ async function goNext(): Promise<void> {
                   </div>
                 </div>
 
-                <div v-if="isGenerating && formData.generationMode === 'deep'" class="spiral-progress">
-                  <div class="spiral-step" :class="{ active: spiralPhase === 'seed', done: spiralPhase === 'expand' || spiralPhase === 'validate' }">
-                    <span class="spiral-dot"></span>
-                    <span>核心骨架</span>
-                  </div>
-                  <div class="spiral-step" :class="{ active: spiralPhase === 'expand', done: spiralPhase === 'validate' }">
-                    <span class="spiral-dot"></span>
-                    <span>展开设计</span>
-                  </div>
-                  <div class="spiral-step" :class="{ active: spiralPhase === 'validate' }">
-                    <span class="spiral-dot"></span>
-                    <span>一致性校验</span>
-                  </div>
-                </div>
-
                 <dl class="summary-grid">
                   <div>
                     <dt>项目名</dt>
@@ -445,7 +455,7 @@ async function goNext(): Promise<void> {
                       @click="formData.generationMode = 'deep'"
                     >
                       <strong>深度生成</strong>
-                      <span>螺旋式推导：从角色核心矛盾出发，生成完整角色、大纲和世界设定。质量更高，耗时约 30 秒。</span>
+                      <span>螺旋式推导：从角色核心矛盾出发，生成完整角色、章节大纲和世界设定。通常耗时 1 到 3 分钟，取决于所选模型。</span>
                     </button>
                     <button
                       type="button"
@@ -478,9 +488,10 @@ async function goNext(): Promise<void> {
             <n-button
               size="large"
               :class="isGenerating ? 'footer-cancel-btn' : 'footer-secondary-btn'"
+              :disabled="isGenerating && formData.generationMode !== 'deep'"
               @click="isGenerating ? cancelGeneration() : goBack()"
             >
-              {{ isGenerating ? '取消生成' : step > 1 ? '上一步' : '取消' }}
+              {{ isGenerating ? (formData.generationMode === 'deep' ? '取消生成' : '生成中') : step > 1 ? '上一步' : '取消' }}
             </n-button>
             <n-button
               type="primary"
@@ -506,6 +517,66 @@ async function goNext(): Promise<void> {
       </section>
     </div>
   </section>
+
+  <n-modal
+    :show="isGenerating"
+    preset="card"
+    class="wizard-generation-modal"
+    :title="formData.generationMode === 'deep' ? '正在深度构建小说' : '正在创建项目'"
+    :bordered="false"
+    :mask-closable="false"
+    :closable="false"
+    :close-on-esc="false"
+  >
+    <div class="generation-progress-body" aria-live="polite">
+      <div class="generation-progress-state">
+        <span class="generation-progress-icon" aria-hidden="true">
+          <LoaderCircle :size="22" class="spin" />
+        </span>
+        <div>
+          <strong>{{ generationStageLabel }}</strong>
+          <span>{{ formData.generationMode === 'deep' ? '正在依次生成角色骨架、章节大纲和一致性校验结果。' : 'AI 正在整理首批世界观与章节大纲。' }}</span>
+        </div>
+      </div>
+
+      <div class="generation-progress-meter">
+        <n-progress type="line" :percentage="generationProgress" :height="8" :show-indicator="false" />
+        <span>{{ generationProgress }}%</span>
+      </div>
+
+      <ol v-if="formData.generationMode === 'deep'" class="generation-phase-list" aria-label="深度生成阶段">
+        <li :class="{ active: spiralPhase === 'seed' && spiralPhaseStatus === 'running', done: spiralPhase === 'expand' || spiralPhase === 'validate' || (spiralPhase === 'seed' && spiralPhaseStatus === 'done') }">
+          <span>1</span>
+          <div><strong>核心骨架</strong><small>主角矛盾、主线方向、世界规则</small></div>
+        </li>
+        <li :class="{ active: spiralPhase === 'expand' && spiralPhaseStatus === 'running', done: spiralPhase === 'validate' || (spiralPhase === 'expand' && spiralPhaseStatus === 'done') }">
+          <span>2</span>
+          <div><strong>章节展开</strong><small>配角动机、章节冲突、合理字数</small></div>
+        </li>
+        <li :class="{ active: spiralPhase === 'validate' && spiralPhaseStatus === 'running', done: spiralPhase === 'validate' && spiralPhaseStatus === 'done' }">
+          <span>3</span>
+          <div><strong>一致性校验</strong><small>因果链、角色弧线、设定缺口</small></div>
+        </li>
+      </ol>
+    </div>
+
+    <template #footer>
+      <div class="generation-progress-footer">
+        <span>生成期间请保持应用开启</span>
+        <n-button
+          v-if="formData.generationMode === 'deep'"
+          secondary
+          :loading="isCancelling"
+          :disabled="isCancelling"
+          class="generation-cancel-button"
+          @click="cancelGeneration"
+        >
+          <template #icon><X :size="16" /></template>
+          {{ isCancelling ? '正在取消' : '取消生成' }}
+        </n-button>
+      </div>
+    </template>
+  </n-modal>
 </template>
 
 <style scoped>
@@ -1064,49 +1135,142 @@ async function goNext(): Promise<void> {
   line-height: 1.5;
 }
 
-.spiral-progress {
+.generation-progress-body {
   display: flex;
-  align-items: center;
-  gap: 18px;
-  padding: 12px 0;
-  border-top: 1px solid var(--arc-border);
-  border-bottom: 1px solid var(--arc-border);
+  flex-direction: column;
+  gap: 22px;
 }
 
-.spiral-step {
+.generation-progress-state {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--arc-text-hint);
-  font-size: 13px;
-  font-weight: 600;
-  transition: color 0.2s;
+  align-items: flex-start;
+  gap: 12px;
 }
 
-.spiral-step.active {
+.generation-progress-icon {
+  display: inline-flex;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--arc-primary-soft);
   color: var(--arc-primary);
 }
 
-.spiral-step.done {
+.generation-progress-state > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.generation-progress-state strong {
+  color: var(--arc-text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.generation-progress-state > div span,
+.generation-progress-footer span {
   color: var(--arc-text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
-.spiral-dot {
-  width: 8px;
-  height: 8px;
+.generation-progress-meter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  align-items: center;
+  gap: 12px;
+}
+
+.generation-progress-meter > span {
+  color: var(--arc-text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.generation-phase-list {
+  display: grid;
+  gap: 0;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.generation-phase-list li {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 60px;
+  border-top: 1px solid var(--arc-border);
+  color: var(--arc-text-hint);
+}
+
+.generation-phase-list li:last-child {
+  border-bottom: 1px solid var(--arc-border);
+}
+
+.generation-phase-list li > span {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--arc-border);
   border-radius: 50%;
-  background: var(--arc-border);
-  transition: background 0.2s;
+  font-size: 12px;
+  font-weight: 700;
 }
 
-.spiral-step.active .spiral-dot {
-  background: var(--arc-primary);
-  animation: pulseGlow 1.4s ease-in-out infinite;
+.generation-phase-list li > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.spiral-step.done .spiral-dot {
-  background: var(--arc-primary);
-  opacity: 0.6;
+.generation-phase-list li strong {
+  color: var(--arc-text-secondary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.generation-phase-list li small {
+  color: var(--arc-text-hint);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.generation-phase-list li.active > span {
+  border-color: color-mix(in srgb, var(--arc-primary) 32%, var(--arc-border));
+  background: var(--arc-primary-soft);
+  color: var(--arc-primary);
+}
+
+.generation-phase-list li.active strong {
+  color: var(--arc-primary);
+}
+
+.generation-phase-list li.done > span {
+  border-color: color-mix(in srgb, var(--arc-primary) 22%, var(--arc-border));
+  color: var(--arc-primary);
+}
+
+.generation-progress-footer {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.generation-cancel-button {
+  min-height: 44px;
 }
 
 .wizard-footer {
@@ -1294,11 +1458,6 @@ async function goNext(): Promise<void> {
     grid-template-columns: 1fr;
   }
 
-  .spiral-progress {
-    flex-wrap: wrap;
-    gap: 10px;
-  }
-
   .generate-icon {
     width: 34px;
     height: 34px;
@@ -1395,4 +1554,34 @@ async function goNext(): Promise<void> {
   }
 }
 
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse,
+  .spin {
+    animation: none;
+  }
+}
+
+</style>
+
+<style>
+.wizard-generation-modal {
+  width: min(560px, calc(100vw - 32px));
+  border-radius: 8px;
+}
+
+@media (max-width: 560px) {
+  .wizard-generation-modal {
+    width: calc(100vw - 24px);
+  }
+}
 </style>

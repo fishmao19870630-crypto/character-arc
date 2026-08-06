@@ -40,6 +40,8 @@ export type AiGenerateOptions = {
 
 export type AiTextGenerationResult = {
   text: string
+  /** 部分兼容模型会把 JSON 放在 reasoning 通道，保留它供结构化任务安全回退。 */
+  reasoningText?: string
   usage?: AiRunUsage
 }
 
@@ -162,6 +164,7 @@ export async function aiGenerateTextWithUsage(
         }
         return {
           text: full,
+          reasoningText: await result.reasoningText,
           usage: toAiRunUsage(await result.totalUsage)
         }
       } catch (error) {
@@ -184,6 +187,7 @@ export async function aiGenerateTextWithUsage(
   })
   return {
     text: result.text,
+    reasoningText: result.reasoningText,
     usage: toAiRunUsage(result.usage)
   }
 }

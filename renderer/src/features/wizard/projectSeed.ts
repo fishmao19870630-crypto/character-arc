@@ -87,7 +87,7 @@ function resolveNovelLengthPreset(length: NovelLength): NovelLengthPreset {
     return {
       projectWordCount: '待统计',
       volumeWordTarget: '30000',
-      chapterWordTarget: '预估 2000字',
+      chapterWordTarget: '2000',
       volumeSummary: '用于集中推进故事主冲突，并在较短篇幅内完成完整闭环。'
     }
   }
@@ -95,9 +95,28 @@ function resolveNovelLengthPreset(length: NovelLength): NovelLengthPreset {
   return {
     projectWordCount: '待统计',
     volumeWordTarget: '100000',
-    chapterWordTarget: '预估 3000字',
+    chapterWordTarget: '3000',
     volumeSummary: '用于承接作品最初的主线冲突、角色出场和后续长线铺垫。'
   }
+}
+
+function normalizeChapterTitle(value: unknown, index: number): string {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  const withoutPrefix = raw
+    .replace(/^\s*第[^章]{1,12}章\s*[:：、.．-]?\s*/u, '')
+    .replace(/^\s*\d+\s*[.．、:：-]\s*/u, '')
+  return `第${index + 1}章：${withoutPrefix || '剧情节拍'}`
+}
+
+function normalizeChapterWordTarget(value: unknown, novelLength: NovelLength, fallback: string): string {
+  const isShort = novelLength === 'short'
+  const minimum = isShort ? 1800 : 3000
+  const maximum = isShort ? 2800 : 4000
+  const fallbackNumber = Number(fallback.match(/\d+/)?.[0] ?? (isShort ? 2000 : 3000))
+  const matched = String(value ?? '').replace(/,/g, '').match(/\d+/)
+  const parsed = matched ? Number(matched[0]) : fallbackNumber
+  const clamped = Math.min(maximum, Math.max(minimum, Number.isFinite(parsed) ? parsed : fallbackNumber))
+  return String(Math.round(clamped / 100) * 100)
 }
 
 function buildBlankStarterChapter(
@@ -190,8 +209,8 @@ export function createProjectWorkspaceSeedFromSpiral(
     return {
       id: createSeedId('outline', index, timestamp),
       volumeId: firstVolumeId,
-      title: beat.title?.trim() || `第${index + 1}章：剧情节拍`,
-      wordTarget: beat.wordTarget?.trim() || preset.chapterWordTarget,
+      title: normalizeChapterTitle(beat.title, index),
+      wordTarget: normalizeChapterWordTarget(beat.wordTarget, novelLength, preset.chapterWordTarget),
       conflict: beat.conflict?.trim() || '待设定',
       summary,
       status: 'planned' as const,
@@ -204,10 +223,10 @@ export function createProjectWorkspaceSeedFromSpiral(
   for (const patch of outlinePatches) {
     const target = outlineItems.find((o) => o.title === patch.title)
     if (target && patch.field && patch.after) {
-      if (patch.field === 'title') target.title = patch.after
+      if (patch.field === 'title') target.title = normalizeChapterTitle(patch.after, outlineItems.indexOf(target))
       else if (patch.field === 'conflict') target.conflict = patch.after
       else if (patch.field === 'summary') target.summary = patch.after
-      else if (patch.field === 'wordTarget') target.wordTarget = patch.after
+      else if (patch.field === 'wordTarget') target.wordTarget = normalizeChapterWordTarget(patch.after, novelLength, preset.chapterWordTarget)
     }
   }
 
@@ -265,8 +284,8 @@ export function createProjectWorkspaceSeed(
   const outlineItems = (bootstrap?.outlineItems ?? []).map((item, index) => ({
     id: createSeedId('outline', index, timestamp),
     volumeId: firstVolumeId,
-    title: item.title?.trim() || `第${index + 1}章：剧情节点`,
-    wordTarget: item.wordTarget?.trim() || preset.chapterWordTarget,
+    title: normalizeChapterTitle(item.title, index),
+    wordTarget: normalizeChapterWordTarget(item.wordTarget, novelLength, preset.chapterWordTarget),
     conflict: item.conflict?.trim() || '新的冲突正在酝酿。',
     summary: item.summary?.trim() || '待补充剧情摘要。',
     status: 'planned' as const,

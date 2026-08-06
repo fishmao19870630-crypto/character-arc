@@ -52,6 +52,25 @@ type PostGenerationPipelineResult = {
 }
 
 /**
+ * 部分兼容模型会把结构化 JSON 放进 reasoning 通道，result.text 因而为空。
+ * 仅在 reasoning 确实可解析为 JSON 时采用，避免把普通思考文本交给任务解析器。
+ */
+function resolveStructuredGenerationText(
+  generation: { text: string; reasoningText?: string },
+  isStructured: boolean
+): string {
+  if (generation.text.trim() || !isStructured || !generation.reasoningText?.trim()) {
+    return generation.text
+  }
+
+  try {
+    return JSON.stringify(extractJsonObject(generation.reasoningText))
+  } catch {
+    return generation.text
+  }
+}
+
+/**
  * 执行一次完整的 AI 任务调用（非流式）。
  * 流程：校验设置 → 选择技能 → 混合检索 → 构建提示词 → 调用模型 → 校验/修复结果 → 触发后处理。
  * @param task - AI 任务载荷，包含任务类型、设置和上下文
@@ -117,7 +136,7 @@ export async function runAiTask(
       structuredSchema ? { schema: structuredSchema } : undefined
     )
     totalUsage = addAiRunUsage(totalUsage, generation.usage)
-    let rawText = generation.text
+    let rawText = resolveStructuredGenerationText(generation, Boolean(structuredSchema))
     logResponse('REQUEST', settings, task.task, rawText, Date.now() - requestStartedAt, { usedSkills: usedSkillIds })
     let result: AiTaskResult
     let normalizeFailed = false
@@ -147,7 +166,7 @@ export async function runAiTask(
           structuredSchema ? { schema: structuredSchema } : undefined
         )
         totalUsage = addAiRunUsage(totalUsage, generation.usage)
-        rawText = generation.text
+        rawText = resolveStructuredGenerationText(generation, Boolean(structuredSchema))
         logResponse(`REPAIR_${attempt}`, settings, task.task, rawText, Date.now() - repairStartedAt, { usedSkills: usedSkillIds })
         normalizeFailed = false
         try {
@@ -288,7 +307,7 @@ export async function streamAiTask(
       ? await aiStreamObjectWithUsage(settings, prompt, handlers, signal, structuredSchema, maxTokens)
       : await aiStreamTextWithUsage(settings, prompt, handlers, signal, maxTokens)
     totalUsage = addAiRunUsage(totalUsage, generation.usage)
-    let rawText = generation.text
+    let rawText = resolveStructuredGenerationText(generation, Boolean(structuredSchema))
     logResponse('STREAM', settings, task.task, rawText, Date.now() - requestStartedAt, { usedSkills: usedSkillIds })
     let result: AiTaskResult
     let normalizeFailed = false
@@ -315,7 +334,7 @@ export async function streamAiTask(
         structuredSchema ? { schema: structuredSchema } : undefined
       )
       totalUsage = addAiRunUsage(totalUsage, generation.usage)
-      rawText = generation.text
+      rawText = resolveStructuredGenerationText(generation, Boolean(structuredSchema))
       logResponse('STREAM_REPAIR', settings, task.task, rawText, Date.now() - repairStartedAt, { usedSkills: usedSkillIds })
       result = taskHandler.normalize(rawText, task.context)
       repairTriggered = true
