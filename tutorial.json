@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "updatedAt": "2026-08-06",
+  "title": "CharacterArc（弧光）使用教程",
+  "intro": "从创建作品、配置 AI，到维护设定、生成大纲和进行章节创作，按这份教程即可快速熟悉弧光。",
+  "resources": [
+    {
+      "id": "feishu-guide",
+      "type": "feishu",
+      "title": "飞书图文教程",
+      "description": "完整介绍项目创建、AI 接口配置、小说工作台、章节创作、全局助手、拆书工具、Skills 和项目备份。",
+      "url": "https://ecnnfa0ullkb.feishu.cn/wiki/CuMxwE8xwiZyIkkYDDfcdmpjnRe?from=from_copylink",
+      "enabled": true
+    },
+    {
+      "id": "bilibili-guide",
+      "type": "bilibili",
+      "title": "B站视频教程",
+      "description": "视频教程正在准备中，发布后会在这里补充链接。",
+      "url": "",
+      "enabled": false
+    }
+  ]
+}

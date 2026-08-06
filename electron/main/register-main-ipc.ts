@@ -1556,6 +1556,19 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
     })
   })
 
+  ipcMain.handle('characterarc:fetch-tutorial', async () => {
+    return fetchWithCache({
+      repo: 'uu201/character-arc',
+      branch: 'main',
+      filePath: 'tutorial.json',
+      cacheDir: 'tutorial-cache',
+      ttlMs: 6 * 60 * 60 * 1000,
+      timeoutMs: 8000,
+      preferActiveMirror: true,
+      allowStaleFallback: true
+    })
+  })
+
   ipcMain.handle('characterarc:open-external-url', (_event, url: string) => {
     if (typeof url === 'string' && (url.startsWith('https://') || url.startsWith('http://'))) {
       shell.openExternal(url)

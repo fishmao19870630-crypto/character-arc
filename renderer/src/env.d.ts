@@ -610,6 +610,11 @@ declare global {
         success: boolean
         data?: Array<{ title: string; date: string; type: string; items: string[] }>
       }>
+      fetchTutorial: () => Promise<{
+        success: boolean
+        data?: unknown
+        error?: string
+      }>
       listSessions: (projectId: string) => Promise<{
         success: boolean
         result?: Array<{ id: string; title: string; created_at: string; updated_at: string }>

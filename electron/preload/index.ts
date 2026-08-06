@@ -225,6 +225,7 @@ contextBridge.exposeInMainWorld('characterArc', {
   // ── 检查更新 & 公告 ──
   checkUpdate: () => ipcRenderer.invoke('characterarc:check-update'),
   fetchAnnouncements: () => ipcRenderer.invoke('characterarc:fetch-announcements'),
+  fetchTutorial: () => ipcRenderer.invoke('characterarc:fetch-tutorial'),
   openExternalUrl: (url: string) => ipcRenderer.invoke('characterarc:open-external-url', url),
 
   // ── 番茄风向标 ──

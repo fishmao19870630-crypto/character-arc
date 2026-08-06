@@ -11,6 +11,10 @@
 </p>
 
 <p>
+  📘 <a href="https://ecnnfa0ullkb.feishu.cn/wiki/CuMxwE8xwiZyIkkYDDfcdmpjnRe?from=from_copylink"><strong>CharacterArc（弧光）使用教程图文版</strong></a>
+</p>
+
+<p>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" />
   <img alt="Version" src="https://img.shields.io/badge/version-v1.14.2-f59e0b?style=flat-square" />
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0ea5e9?style=flat-square" />
