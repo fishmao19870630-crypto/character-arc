@@ -49,7 +49,12 @@ function hasProposalContent(proposal: Partial<GlobalAssistantProposalResult>): b
 
 function normalizeReferenceIds(value: unknown): string[] {
   if (!Array.isArray(value)) return []
-  return [...new Set(value.map((item) => String(item ?? '').trim()).filter(Boolean))].slice(0, 12)
+  return [...new Set(value.map((item) => {
+    if (typeof item === 'string') return item.trim()
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return ''
+    const record = item as Record<string, unknown>
+    return String(record.id ?? record.name ?? record.title ?? '').trim()
+  }).filter(Boolean))].slice(0, 12)
 }
 
 const handler: TaskHandler = {
@@ -138,7 +143,7 @@ ${String(context.userPrompt ?? '')}
 6. characterUpdates：需要修改的人物卡，必须带 matchName 和 reason。
 7. organizationCreates：需要新增的势力/组织条目。
 8. organizationUpdates：需要修改的势力/组织条目，必须带 matchName 和 reason。
-9. outlineCreates：需要新增的大纲节点，每条必须带目标分卷的 volumeId，禁止缺省到第一个分卷；同时根据现有角色、组织、世界观自动填写关联 ID 数组。
+9. outlineCreates：需要新增的大纲节点，每条必须带目标分卷的 volumeId，禁止缺省到第一个分卷；同时根据现有角色、组织、世界观自动填写关联 ID 数组；现有角色非空时 relatedCharacterIds 至少填写一个直接相关角色的真实 id。
 10. outlineUpdates：需要修改的大纲节点，必须带 matchTitle 和 reason；只有需要迁卷时才带 volumeId；关联 ID 只填写本次修改明确涉及的实体。
 11. notes：补充提醒，例如”这条约束尚未写入人物卡，需要用户确认”。
 12. 如果某一类没有提案，返回空数组。
@@ -146,7 +151,7 @@ ${String(context.userPrompt ?? '')}
 14. 不要为了覆盖所有分类而强行填满数组，只返回真正需要写回的内容。
 
 返回格式：
-{“summary”:””,”constraintCreates”:[{“title”:””,”content”:””,”scope”:””,”weight”:”core”,”locked”:true,”reason”:””,”keywords”:[“”]}],”worldviewCreates”:[{“type”:””,”title”:””,”content”:””}],”worldviewUpdates”:[{“matchTitle”:””,”reason”:””,”type”:””,”title”:””,”content”:””}],”characterCreates”:[{“name”:””,”role”:””,”description”:””,”tags”:[“”]}],”characterUpdates”:[{“matchName”:””,”reason”:””,”name”:””,”role”:””,”description”:””,”tags”:[“”]}],”organizationCreates”:[{“name”:””,”type”:””,”description”:””,”motto”:””}],”organizationUpdates”:[{“matchName”:””,”reason”:””,”name”:””,”type”:””,”description”:””,”motto”:””}],”outlineCreates”:[{“volumeId”:””,”title”:””,”wordTarget”:””,”conflict”:””,”summary”:””}],”outlineUpdates”:[{“matchTitle”:””,”reason”:””,”title”:””,”wordTarget”:””,”conflict”:””,”summary”:””,”volumeId”:””}],”notes”:[“”]}`
+{“summary”:””,”constraintCreates”:[{“title”:””,”content”:””,”scope”:””,”weight”:”core”,”locked”:true,”reason”:””,”keywords”:[“”]}],”worldviewCreates”:[{“type”:””,”title”:””,”content”:””}],”worldviewUpdates”:[{“matchTitle”:””,”reason”:””,”type”:””,”title”:””,”content”:””}],”characterCreates”:[{“name”:””,”role”:””,”description”:””,”tags”:[“”]}],”characterUpdates”:[{“matchName”:””,”reason”:””,”name”:””,”role”:””,”description”:””,”tags”:[“”]}],”organizationCreates”:[{“name”:””,”type”:””,”description”:””,”motto”:””}],”organizationUpdates”:[{“matchName”:””,”reason”:””,”name”:””,”type”:””,”description”:””,”motto”:””}],”outlineCreates”:[{“volumeId”:””,”title”:””,”wordTarget”:””,”conflict”:””,”summary”:””,”relatedCharacterIds”:[“”],”relatedOrganizationIds”:[“”],”relatedWorldviewIds”:[“”]}],”outlineUpdates”:[{“matchTitle”:””,”reason”:””,”title”:””,”wordTarget”:””,”conflict”:””,”summary”:””,”volumeId”:””,”relatedCharacterIds”:[“”],”relatedOrganizationIds”:[“”],”relatedWorldviewIds”:[“”]}],”notes”:[“”]}`
     }
   },
   normalize(raw: string): AiTaskResult {

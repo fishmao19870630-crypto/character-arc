@@ -2,6 +2,7 @@ import type { TaskHandler, PromptBuildInput } from './base'
 import { extractJsonObject, jsonStringField } from './base'
 import type { AiTaskResult, OutlineResult } from '../shared-types'
 import { resolveWritingStyleInstruction } from '../prompts/shared'
+import { normalizeOutlineReferenceIds } from './outline-item'
 
 const handler: TaskHandler = {
   name: 'outline-enhance',
@@ -23,8 +24,8 @@ const handler: TaskHandler = {
     }
 
     return {
-      system: `${capabilityPreamble.system}\n\n你是小说剧情大纲增强助手。用户正在编辑一个大纲节点，请根据已有内容和项目上下文对每个字段进行补充或优化。对于空字段，必须基于当前分卷、前后节点、角色和世界观锚点直接生成合理内容，不要向用户提问。对于已有内容的字段，在保留作者意图的基础上扩展和完善。请只返回 JSON 对象，不要返回 Markdown；大纲模式必须返回 relatedCharacterIds、relatedOrganizationIds、relatedWorldviewIds，且只能使用上下文已有实体 id。`,
-      user: `${capabilityPreamble.user}\n\n当前表单状态：\n- 节点标题：${String(currentForm?.title ?? '')}\n- 预估字数：${String(currentForm?.wordTarget ?? '')}\n- 核心冲突：${String(currentForm?.conflict ?? '')}\n- 剧情描述：${String(currentForm?.summary ?? '')}\n\n项目标题：${String(context.projectTitle ?? '')}\n项目题材：${String(context.projectGenre ?? '')}\n所属分卷：${String(context.volumeTitle ?? '')}\n分卷摘要：${String(context.volumeSummary ?? '')}\n已有大纲节点：${JSON.stringify(context.outlineTitles ?? [])}\n当前分卷已有节点：${JSON.stringify(context.currentVolumeOutlineItems ?? [])}\n世界观关键词：${JSON.stringify(context.worldviewTitles ?? [])}\n已有角色：${JSON.stringify(context.characterNames ?? [])}${projectContext}\n\n要求：\n0. 不要回答“需要补充信息”或提出问题；信息不足时，从已有项目锚点中选择最稳妥的延展方向。\n1. title：体现与前后节点的承接关系；若已有则可微调\n2. wordTarget：使用 3000 到 4000 之间的纯数字\n3. conflict：一句话概括核心冲突；若已有则可优化\n4. summary：80-180字描述剧情推进；若已有则在原文基础上扩展完善\n5. 与分卷目标和已有大纲保持连续\n6. ${writingStyle}\n\n返回格式：{"title":"","wordTarget":"","conflict":"","summary":""}`
+      system: `${capabilityPreamble.system}\n\n你是小说剧情大纲增强助手。用户正在编辑一个大纲节点，请根据已有内容和项目上下文对每个字段进行补充或优化。对于空字段，必须基于当前分卷、前后节点、角色和世界观锚点直接生成合理内容，不要向用户提问。对于已有内容的字段，在保留作者意图的基础上扩展和完善。请只返回 JSON 对象，不要返回 Markdown；大纲模式必须返回 relatedCharacterIds、relatedOrganizationIds、relatedWorldviewIds，且只能使用上下文已有实体 id；角色参考非空时至少填写一个直接相关角色的 id。`,
+      user: `${capabilityPreamble.user}\n\n当前表单状态：\n- 节点标题：${String(currentForm?.title ?? '')}\n- 预估字数：${String(currentForm?.wordTarget ?? '')}\n- 核心冲突：${String(currentForm?.conflict ?? '')}\n- 剧情描述：${String(currentForm?.summary ?? '')}\n\n项目标题：${String(context.projectTitle ?? '')}\n项目题材：${String(context.projectGenre ?? '')}\n所属分卷：${String(context.volumeTitle ?? '')}\n分卷摘要：${String(context.volumeSummary ?? '')}\n已有大纲节点：${JSON.stringify(context.outlineTitles ?? [])}\n当前分卷已有节点：${JSON.stringify(context.currentVolumeOutlineItems ?? [])}\n世界观关键词：${JSON.stringify(context.worldviewTitles ?? [])}\n已有角色：${JSON.stringify(context.characterNames ?? [])}${projectContext}\n\n要求：\n0. 不要回答“需要补充信息”或提出问题；信息不足时，从已有项目锚点中选择最稳妥的延展方向。\n1. title：体现与前后节点的承接关系；若已有则可微调\n2. wordTarget：使用 3000 到 4000 之间的纯数字\n3. conflict：一句话概括核心冲突；若已有则可优化\n4. summary：80-180字描述剧情推进；若已有则在原文基础上扩展完善\n5. 与分卷目标和已有大纲保持连续\n6. 角色行动必须符合角色定位、既有关系和组织立场；涉及世界规则时不得与已有设定冲突\n7. ${writingStyle}\n\n返回格式：{"title":"","wordTarget":"","conflict":"","summary":"","relatedCharacterIds":[],"relatedOrganizationIds":[],"relatedWorldviewIds":[]}`
     }
   },
   normalize(raw: string): AiTaskResult {
@@ -34,9 +35,9 @@ const handler: TaskHandler = {
       wordTarget: jsonStringField(parsed.wordTarget),
       conflict: jsonStringField(parsed.conflict),
       summary: jsonStringField(parsed.summary),
-      relatedCharacterIds: Array.isArray(parsed.relatedCharacterIds) ? parsed.relatedCharacterIds.filter((id): id is string => typeof id === 'string').map((id) => id.trim()).filter(Boolean).slice(0, 12) : [],
-      relatedOrganizationIds: Array.isArray(parsed.relatedOrganizationIds) ? parsed.relatedOrganizationIds.filter((id): id is string => typeof id === 'string').map((id) => id.trim()).filter(Boolean).slice(0, 12) : [],
-      relatedWorldviewIds: Array.isArray(parsed.relatedWorldviewIds) ? parsed.relatedWorldviewIds.filter((id): id is string => typeof id === 'string').map((id) => id.trim()).filter(Boolean).slice(0, 12) : []
+      relatedCharacterIds: normalizeOutlineReferenceIds(parsed.relatedCharacterIds),
+      relatedOrganizationIds: normalizeOutlineReferenceIds(parsed.relatedOrganizationIds),
+      relatedWorldviewIds: normalizeOutlineReferenceIds(parsed.relatedWorldviewIds)
     } as OutlineResult
   },
   validate(result: AiTaskResult): boolean {
@@ -59,6 +60,8 @@ function formatProjectContext(context: Record<string, unknown>, knowledgeBlock: 
   if (Array.isArray(context.worldviewEntries)) sections.push(`世界观参考：${JSON.stringify(context.worldviewEntries)}`)
   if (Array.isArray(context.characters)) sections.push(`角色参考：${JSON.stringify(context.characters)}`)
   if (Array.isArray(context.organizations)) sections.push(`组织参考：${JSON.stringify(context.organizations)}`)
+  if (Array.isArray(context.characterRelationships)) sections.push(`角色关系参考：${JSON.stringify(context.characterRelationships)}`)
+  if (Array.isArray(context.organizationMemberships)) sections.push(`组织归属参考：${JSON.stringify(context.organizationMemberships)}`)
   if (knowledgeBlock.trim()) sections.push(`检索到的项目知识：\n${knowledgeBlock}`)
   return sections.length ? `\n${sections.join('\n')}` : ''
 }

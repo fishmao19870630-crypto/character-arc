@@ -6,6 +6,7 @@ import { useEventListener } from '@vueuse/core'
 import { getChapterCharacterCount } from '@/features/chapters/editorContent'
 import { useAppStore } from '@/stores/app'
 import { buildProjectWritingStyleContext } from '@/features/writingStyles/presets'
+import { resolveOutlineReferenceIds } from '@/features/ai/outlineReferences'
 import { formatVolumeLabel, normalizeVolumeWordTarget } from '@/features/workspace/outlineVolumes'
 import type { OutlineDropPosition } from '@/features/workspace/outlineReorder'
 import { toIpcPayload } from '@/utils/ipcPayload'
@@ -421,37 +422,82 @@ function buildAiOutlineContext(volumeId?: string) {
   }))
 }
 
-function buildAiWorldviewContext() {
-  return appStore.worldviewEntries.slice(0, 16).map((entry) => ({
-    id: entry.id,
-    type: entry.type,
-    title: entry.title,
-    content: compactForAi(entry.content, 320)
-  }))
+function prioritizeById<T extends { id: string }>(items: T[], priorityIds: Set<string>, limit = 24): T[] {
+  return [
+    ...items.filter((item) => priorityIds.has(item.id)),
+    ...items.filter((item) => !priorityIds.has(item.id))
+  ].slice(0, limit)
 }
 
-function buildAiCharactersContext() {
-  return appStore.characters.slice(0, 16).map((character) => ({
-    id: character.id,
-    name: character.name,
-    role: character.role,
-    description: compactForAi(character.description, 260),
-    tags: character.tags.map((tag) => tag.label)
-  }))
+function buildAiEntityContext(volumeId?: string) {
+  const referenceItems = volumeId
+    ? appStore.outlineItems.filter((item) => item.volumeId === volumeId)
+    : appStore.outlineItems
+  const characterPriorityIds = new Set(referenceItems.flatMap((item) => item.relatedCharacterIds ?? []))
+  const organizationPriorityIds = new Set(referenceItems.flatMap((item) => item.relatedOrganizationIds ?? []))
+  const worldviewPriorityIds = new Set(referenceItems.flatMap((item) => item.relatedWorldviewIds ?? []))
+  const characters = prioritizeById(appStore.characters, characterPriorityIds)
+  const organizations = prioritizeById(appStore.organizations, organizationPriorityIds)
+  const worldviewEntries = prioritizeById(appStore.worldviewEntries, worldviewPriorityIds)
+  const includedCharacterIds = new Set(characters.map((item) => item.id))
+  const includedOrganizationIds = new Set(organizations.map((item) => item.id))
+  const characterNameById = new Map(appStore.characters.map((item) => [item.id, item.name]))
+  const organizationNameById = new Map(appStore.organizations.map((item) => [item.id, item.name]))
+
+  return {
+    worldviewEntries: worldviewEntries.map((entry) => ({
+      id: entry.id,
+      type: entry.type,
+      title: entry.title,
+      content: compactForAi(entry.content, 320)
+    })),
+    characters: characters.map((character) => ({
+      id: character.id,
+      name: character.name,
+      role: character.role,
+      description: compactForAi(character.description, 260),
+      tags: character.tags.map((tag) => tag.label)
+    })),
+    organizations: organizations.map((organization) => ({
+      id: organization.id,
+      name: organization.name,
+      type: organization.type,
+      description: compactForAi(organization.description, 260)
+    })),
+    characterRelationships: appStore.characterRelationships
+      .filter((relationship) =>
+        includedCharacterIds.has(relationship.fromCharacterId) || includedCharacterIds.has(relationship.toCharacterId)
+      )
+      .slice(0, 32)
+      .map((relationship) => ({
+        id: relationship.id,
+        fromCharacterId: relationship.fromCharacterId,
+        fromCharacterName: characterNameById.get(relationship.fromCharacterId) ?? '',
+        toCharacterId: relationship.toCharacterId,
+        toCharacterName: characterNameById.get(relationship.toCharacterId) ?? '',
+        type: relationship.type,
+        description: compactForAi(relationship.description, 220),
+        intensity: relationship.intensity
+      })),
+    organizationMemberships: appStore.organizationMemberships
+      .filter((membership) =>
+        includedCharacterIds.has(membership.characterId) || includedOrganizationIds.has(membership.organizationId)
+      )
+      .slice(0, 32)
+      .map((membership) => ({
+        id: membership.id,
+        characterId: membership.characterId,
+        characterName: characterNameById.get(membership.characterId) ?? '',
+        organizationId: membership.organizationId,
+        organizationName: organizationNameById.get(membership.organizationId) ?? '',
+        role: membership.role,
+        notes: compactForAi(membership.notes, 180)
+      }))
+  }
 }
 
-function buildAiOrganizationsContext() {
-  return appStore.organizations.slice(0, 16).map((organization) => ({
-    id: organization.id,
-    name: organization.name,
-    type: organization.type,
-    description: compactForAi(organization.description, 260)
-  }))
-}
-
-function normalizeAiReferenceIds(value: unknown, validIds: Set<string>): string[] {
-  if (!Array.isArray(value)) return []
-  return [...new Set(value.map((id) => String(id).trim()).filter((id) => id && validIds.has(id)))]
+function buildAiOutlineReferenceText(item: { title?: string; conflict?: string; summary?: string }): string {
+  return [item.title, item.conflict, item.summary].filter(Boolean).join('\n')
 }
 
 // 打开新建大纲节点弹窗，默认归属到指定分卷
@@ -497,9 +543,7 @@ async function handleExpandOutline(): Promise<void> {
             outlineTitles: appStore.outlineItems.map((item) => item.title),
             volumes: buildAiVolumesContext(),
             outlineItems: buildAiOutlineContext(),
-            worldviewEntries: buildAiWorldviewContext(),
-            characters: buildAiCharactersContext(),
-            organizations: buildAiOrganizationsContext(),
+            ...buildAiEntityContext(),
             worldviewTitles: appStore.worldviewEntries.map((entry) => entry.title),
             characterNames: appStore.characters.map((character) => character.name)
           }
@@ -560,9 +604,7 @@ async function handleExpandVolumeOutline(volume: OutlineVolume): Promise<void> {
               worldviewTitles: appStore.worldviewEntries.map((entry) => entry.title),
               volumes: buildAiVolumesContext(),
               outlineItems: buildAiOutlineContext(),
-              worldviewEntries: buildAiWorldviewContext(),
-              characters: buildAiCharactersContext(),
-              organizations: buildAiOrganizationsContext(),
+              ...buildAiEntityContext(volume.id),
               currentVolumeOutlineItems: appStore.outlineItems
                 .filter((item) => item.volumeId === volume.id)
                 .map((item) => ({
@@ -597,15 +639,16 @@ async function handleExpandVolumeOutline(volume: OutlineVolume): Promise<void> {
     }
 
     entries.forEach((entry) => {
+      const referenceText = buildAiOutlineReferenceText(entry)
       appStore.createOutlineItem({
         volumeId: volume.id,
         title: entry.title,
         wordTarget: normalizeOutlineItemWordTarget(entry.wordTarget),
         conflict: entry.conflict,
         summary: entry.summary,
-        relatedCharacterIds: normalizeAiReferenceIds(entry.relatedCharacterIds, new Set(appStore.characters.map((item) => item.id))),
-        relatedOrganizationIds: normalizeAiReferenceIds(entry.relatedOrganizationIds, new Set(appStore.organizations.map((item) => item.id))),
-        relatedWorldviewIds: normalizeAiReferenceIds(entry.relatedWorldviewIds, new Set(appStore.worldviewEntries.map((item) => item.id))),
+        relatedCharacterIds: resolveOutlineReferenceIds(entry.relatedCharacterIds, appStore.characters, referenceText),
+        relatedOrganizationIds: resolveOutlineReferenceIds(entry.relatedOrganizationIds, appStore.organizations, referenceText),
+        relatedWorldviewIds: resolveOutlineReferenceIds(entry.relatedWorldviewIds, appStore.worldviewEntries, referenceText),
         status: 'planned'
       })
     })
@@ -1595,9 +1638,7 @@ async function handleAiEnhanceItem(): Promise<void> {
             outlineTitles: appStore.outlineItems.map((i) => i.title),
             volumes: buildAiVolumesContext(),
             outlineItems: buildAiOutlineContext(),
-            worldviewEntries: buildAiWorldviewContext(),
-            characters: buildAiCharactersContext(),
-            organizations: buildAiOrganizationsContext(),
+            ...buildAiEntityContext(form.volumeId),
             currentVolumeOutlineItems: appStore.outlineItems
               .filter((i) => i.volumeId === form.volumeId)
               .map((i) => ({ title: i.title, conflict: i.conflict, summary: i.summary })),
@@ -1616,9 +1657,10 @@ async function handleAiEnhanceItem(): Promise<void> {
       relatedCharacterIds?: string[]; relatedOrganizationIds?: string[]; relatedWorldviewIds?: string[]
     }
     const suggestedWordTarget = normalizeOutlineItemWordTarget(suggested.wordTarget)
-    const suggestedCharacterIds = normalizeAiReferenceIds(suggested.relatedCharacterIds, new Set(appStore.characters.map((item) => item.id)))
-    const suggestedOrganizationIds = normalizeAiReferenceIds(suggested.relatedOrganizationIds, new Set(appStore.organizations.map((item) => item.id)))
-    const suggestedWorldviewIds = normalizeAiReferenceIds(suggested.relatedWorldviewIds, new Set(appStore.worldviewEntries.map((item) => item.id)))
+    const referenceText = buildAiOutlineReferenceText(suggested)
+    const suggestedCharacterIds = resolveOutlineReferenceIds(suggested.relatedCharacterIds, appStore.characters, referenceText)
+    const suggestedOrganizationIds = resolveOutlineReferenceIds(suggested.relatedOrganizationIds, appStore.organizations, referenceText)
+    const suggestedWorldviewIds = resolveOutlineReferenceIds(suggested.relatedWorldviewIds, appStore.worldviewEntries, referenceText)
 
     enhanceItemFields.value = [
       { key: 'title', label: '节点标题', type: 'text', original: form.title, suggested: suggested.title ?? '', changed: (suggested.title ?? '') !== form.title && Boolean(suggested.title?.trim()) },
@@ -1672,9 +1714,7 @@ async function handleAiEnhanceVolume(): Promise<void> {
             volumeTitles: appStore.outlineVolumes.map((v) => v.title),
             volumes: buildAiVolumesContext(),
             outlineItems: buildAiOutlineContext(),
-            worldviewEntries: buildAiWorldviewContext(),
-            characters: buildAiCharactersContext(),
-            organizations: buildAiOrganizationsContext(),
+            ...buildAiEntityContext(),
             worldviewTitles: appStore.worldviewEntries.map((e) => e.title),
             characterNames: appStore.characters.map((c) => c.name)
           }

@@ -6,6 +6,7 @@ import type { SelectOption } from 'naive-ui'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import type { AssistantToolCall, ChapterEditProposal, ChatMessage, GlobalAssistantProposal, PanelName } from '@/types/app'
+import { resolveOutlineReferenceIds } from '@/features/ai/outlineReferences'
 import { useAppStore } from '@/stores/app'
 import { toIpcPayload } from '@/utils/ipcPayload'
 
@@ -847,12 +848,8 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
     return `${currentText}\n\n${incomingText}`
   }
 
-  function validOutlineReferenceIds(
-    ids: string[] | undefined,
-    validIds: Set<string>
-  ): string[] | undefined {
-    if (!Array.isArray(ids)) return undefined
-    return [...new Set(ids.map((id) => String(id).trim()).filter((id) => id && validIds.has(id)))]
+  function outlineProposalReferenceText(item: { title?: string; conflict?: string; summary?: string }): string {
+    return [item.title, item.conflict, item.summary].filter(Boolean).join('\n')
   }
 
   function outlineReferenceLines(item: {
@@ -1428,9 +1425,6 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
     const current = proposal.value
     if (!current) return
 
-    const characterIds = new Set(appStore.characters.map((entry) => entry.id))
-    const organizationIds = new Set(appStore.organizations.map((entry) => entry.id))
-    const worldviewIds = new Set(appStore.worldviewEntries.map((entry) => entry.id))
     let appliedCount = 0
     const appliedTitles: string[] = []
     const remainingCreates: GlobalAssistantProposal['outlineCreates'] = []
@@ -1442,15 +1436,16 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
         remainingCreates.push(item)
         continue
       }
+      const referenceText = outlineProposalReferenceText(item)
       appStore.createOutlineItem({
         volumeId: volume.id,
         title: item.title,
         wordTarget: item.wordTarget,
         conflict: item.conflict,
         summary: item.summary,
-        relatedCharacterIds: validOutlineReferenceIds(item.relatedCharacterIds, characterIds),
-        relatedOrganizationIds: validOutlineReferenceIds(item.relatedOrganizationIds, organizationIds),
-        relatedWorldviewIds: validOutlineReferenceIds(item.relatedWorldviewIds, worldviewIds),
+        relatedCharacterIds: resolveOutlineReferenceIds(item.relatedCharacterIds, appStore.characters, referenceText),
+        relatedOrganizationIds: resolveOutlineReferenceIds(item.relatedOrganizationIds, appStore.organizations, referenceText),
+        relatedWorldviewIds: resolveOutlineReferenceIds(item.relatedWorldviewIds, appStore.worldviewEntries, referenceText),
         status: 'planned'
       })
       appliedCount += 1
@@ -1473,13 +1468,13 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
         conflict: item.conflict,
         summary: mergeLongTextForIngest(target.summary, item.summary),
         ...(item.relatedCharacterIds !== undefined
-          ? { relatedCharacterIds: validOutlineReferenceIds(item.relatedCharacterIds, characterIds) }
+          ? { relatedCharacterIds: resolveOutlineReferenceIds(item.relatedCharacterIds, appStore.characters, outlineProposalReferenceText(item)) }
           : {}),
         ...(item.relatedOrganizationIds !== undefined
-          ? { relatedOrganizationIds: validOutlineReferenceIds(item.relatedOrganizationIds, organizationIds) }
+          ? { relatedOrganizationIds: resolveOutlineReferenceIds(item.relatedOrganizationIds, appStore.organizations, outlineProposalReferenceText(item)) }
           : {}),
         ...(item.relatedWorldviewIds !== undefined
-          ? { relatedWorldviewIds: validOutlineReferenceIds(item.relatedWorldviewIds, worldviewIds) }
+          ? { relatedWorldviewIds: resolveOutlineReferenceIds(item.relatedWorldviewIds, appStore.worldviewEntries, outlineProposalReferenceText(item)) }
           : {})
       })
       appliedCount += 1
@@ -1680,12 +1675,16 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
         message.warning('该大纲提案缺少有效分卷归属，无法写回')
         return false
       }
+      const referenceText = outlineProposalReferenceText(item)
       appStore.createOutlineItem({
         volumeId: volume.id,
         title: item.title,
         wordTarget: item.wordTarget,
         conflict: item.conflict,
         summary: item.summary,
+        relatedCharacterIds: resolveOutlineReferenceIds(item.relatedCharacterIds, appStore.characters, referenceText),
+        relatedOrganizationIds: resolveOutlineReferenceIds(item.relatedOrganizationIds, appStore.organizations, referenceText),
+        relatedWorldviewIds: resolveOutlineReferenceIds(item.relatedWorldviewIds, appStore.worldviewEntries, referenceText),
         status: 'planned'
       })
       setProposal(trimProposal({
@@ -1713,7 +1712,16 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
         title: item.title,
         wordTarget: item.wordTarget,
         conflict: item.conflict,
-        summary: mergeLongTextForIngest(target.summary, item.summary)
+        summary: mergeLongTextForIngest(target.summary, item.summary),
+        ...(item.relatedCharacterIds !== undefined
+          ? { relatedCharacterIds: resolveOutlineReferenceIds(item.relatedCharacterIds, appStore.characters, outlineProposalReferenceText(item)) }
+          : {}),
+        ...(item.relatedOrganizationIds !== undefined
+          ? { relatedOrganizationIds: resolveOutlineReferenceIds(item.relatedOrganizationIds, appStore.organizations, outlineProposalReferenceText(item)) }
+          : {}),
+        ...(item.relatedWorldviewIds !== undefined
+          ? { relatedWorldviewIds: resolveOutlineReferenceIds(item.relatedWorldviewIds, appStore.worldviewEntries, outlineProposalReferenceText(item)) }
+          : {})
       })
       const { [outlineUpdateKey(index, item.matchTitle)]: _removed, ...remainingTargets } = outlineTargetMap.value
       outlineTargetMap.value = remainingTargets
