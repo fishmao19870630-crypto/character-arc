@@ -47,6 +47,11 @@ function hasProposalContent(proposal: Partial<GlobalAssistantProposalResult>): b
   )
 }
 
+function normalizeReferenceIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value.map((item) => String(item ?? '').trim()).filter(Boolean))].slice(0, 12)
+}
+
 const handler: TaskHandler = {
   name: 'global-assistant-proposal',
   outputType: 'json',
@@ -133,8 +138,8 @@ ${String(context.userPrompt ?? '')}
 6. characterUpdates：需要修改的人物卡，必须带 matchName 和 reason。
 7. organizationCreates：需要新增的势力/组织条目。
 8. organizationUpdates：需要修改的势力/组织条目，必须带 matchName 和 reason。
-9. outlineCreates：需要新增的大纲节点，每条必须带目标分卷的 volumeId，禁止缺省到第一个分卷。
-10. outlineUpdates：需要修改的大纲节点，必须带 matchTitle 和 reason；只有需要迁卷时才带 volumeId。
+9. outlineCreates：需要新增的大纲节点，每条必须带目标分卷的 volumeId，禁止缺省到第一个分卷；同时根据现有角色、组织、世界观自动填写关联 ID 数组。
+10. outlineUpdates：需要修改的大纲节点，必须带 matchTitle 和 reason；只有需要迁卷时才带 volumeId；关联 ID 只填写本次修改明确涉及的实体。
 11. notes：补充提醒，例如”这条约束尚未写入人物卡，需要用户确认”。
 12. 如果某一类没有提案，返回空数组。
 13. 每一类最多返回 4 条；每个 content/description/summary 控制在 180 字以内，reason 控制在 80 字以内，notes 每条控制在 80 字以内。
@@ -247,7 +252,10 @@ ${String(context.userPrompt ?? '')}
             title: String(item?.title ?? '').trim(),
             wordTarget: String(item?.wordTarget ?? '').trim(),
             conflict: String(item?.conflict ?? '').trim(),
-            summary: String(item?.summary ?? '').trim()
+            summary: String(item?.summary ?? '').trim(),
+            relatedCharacterIds: normalizeReferenceIds(item?.relatedCharacterIds),
+            relatedOrganizationIds: normalizeReferenceIds(item?.relatedOrganizationIds),
+            relatedWorldviewIds: normalizeReferenceIds(item?.relatedWorldviewIds)
           }))
           .filter((item) => item.volumeId && item.title && item.summary)
           .slice(0, 8)
@@ -262,9 +270,15 @@ ${String(context.userPrompt ?? '')}
             wordTarget: String(item?.wordTarget ?? '').trim() || undefined,
             conflict: String(item?.conflict ?? '').trim() || undefined,
             summary: String(item?.summary ?? '').trim() || undefined,
-            volumeId: String(item?.volumeId ?? '').trim() || undefined
+            volumeId: String(item?.volumeId ?? '').trim() || undefined,
+            relatedCharacterIds: Array.isArray(item?.relatedCharacterIds) ? normalizeReferenceIds(item.relatedCharacterIds) : undefined,
+            relatedOrganizationIds: Array.isArray(item?.relatedOrganizationIds) ? normalizeReferenceIds(item.relatedOrganizationIds) : undefined,
+            relatedWorldviewIds: Array.isArray(item?.relatedWorldviewIds) ? normalizeReferenceIds(item.relatedWorldviewIds) : undefined
           }))
-          .filter((item) => item.matchTitle && item.reason && (item.title || item.wordTarget || item.conflict || item.summary || item.volumeId))
+          .filter((item) => item.matchTitle && item.reason && (
+            item.title || item.wordTarget || item.conflict || item.summary || item.volumeId ||
+            item.relatedCharacterIds || item.relatedOrganizationIds || item.relatedWorldviewIds
+          ))
           .slice(0, 8)
       : []
 

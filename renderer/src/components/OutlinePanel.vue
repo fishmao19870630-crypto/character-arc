@@ -409,16 +409,21 @@ function buildAiOutlineContext(volumeId?: string) {
     : appStore.outlineItems
 
   return items.slice(-24).map((item) => ({
+    id: item.id,
     title: item.title,
     volumeTitle: appStore.outlineVolumes.find((volume) => volume.id === item.volumeId)?.title ?? '',
     conflict: compactForAi(item.conflict, 180),
     summary: compactForAi(item.summary, 320),
+    relatedCharacterIds: item.relatedCharacterIds ?? [],
+    relatedOrganizationIds: item.relatedOrganizationIds ?? [],
+    relatedWorldviewIds: item.relatedWorldviewIds ?? [],
     status: item.status
   }))
 }
 
 function buildAiWorldviewContext() {
   return appStore.worldviewEntries.slice(0, 16).map((entry) => ({
+    id: entry.id,
     type: entry.type,
     title: entry.title,
     content: compactForAi(entry.content, 320)
@@ -427,11 +432,26 @@ function buildAiWorldviewContext() {
 
 function buildAiCharactersContext() {
   return appStore.characters.slice(0, 16).map((character) => ({
+    id: character.id,
     name: character.name,
     role: character.role,
     description: compactForAi(character.description, 260),
     tags: character.tags.map((tag) => tag.label)
   }))
+}
+
+function buildAiOrganizationsContext() {
+  return appStore.organizations.slice(0, 16).map((organization) => ({
+    id: organization.id,
+    name: organization.name,
+    type: organization.type,
+    description: compactForAi(organization.description, 260)
+  }))
+}
+
+function normalizeAiReferenceIds(value: unknown, validIds: Set<string>): string[] {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value.map((id) => String(id).trim()).filter((id) => id && validIds.has(id)))]
 }
 
 // 打开新建大纲节点弹窗，默认归属到指定分卷
@@ -479,6 +499,7 @@ async function handleExpandOutline(): Promise<void> {
             outlineItems: buildAiOutlineContext(),
             worldviewEntries: buildAiWorldviewContext(),
             characters: buildAiCharactersContext(),
+            organizations: buildAiOrganizationsContext(),
             worldviewTitles: appStore.worldviewEntries.map((entry) => entry.title),
             characterNames: appStore.characters.map((character) => character.name)
           }
@@ -540,12 +561,8 @@ async function handleExpandVolumeOutline(volume: OutlineVolume): Promise<void> {
               volumes: buildAiVolumesContext(),
               outlineItems: buildAiOutlineContext(),
               worldviewEntries: buildAiWorldviewContext(),
-              characters: appStore.characters.map((character) => ({
-                name: character.name,
-                role: character.role,
-                description: compactForAi(character.description, 260),
-                tags: character.tags.map((tag) => tag.label)
-              })),
+              characters: buildAiCharactersContext(),
+              organizations: buildAiOrganizationsContext(),
               currentVolumeOutlineItems: appStore.outlineItems
                 .filter((item) => item.volumeId === volume.id)
                 .map((item) => ({
@@ -569,6 +586,9 @@ async function handleExpandVolumeOutline(volume: OutlineVolume): Promise<void> {
         wordTarget?: string
         conflict?: string
         summary?: string
+        relatedCharacterIds?: string[]
+        relatedOrganizationIds?: string[]
+        relatedWorldviewIds?: string[]
       }>
     }
     const entries = Array.isArray(payload.entries) ? payload.entries : []
@@ -583,6 +603,9 @@ async function handleExpandVolumeOutline(volume: OutlineVolume): Promise<void> {
         wordTarget: normalizeOutlineItemWordTarget(entry.wordTarget),
         conflict: entry.conflict,
         summary: entry.summary,
+        relatedCharacterIds: normalizeAiReferenceIds(entry.relatedCharacterIds, new Set(appStore.characters.map((item) => item.id))),
+        relatedOrganizationIds: normalizeAiReferenceIds(entry.relatedOrganizationIds, new Set(appStore.organizations.map((item) => item.id))),
+        relatedWorldviewIds: normalizeAiReferenceIds(entry.relatedWorldviewIds, new Set(appStore.worldviewEntries.map((item) => item.id))),
         status: 'planned'
       })
     })
@@ -1574,6 +1597,7 @@ async function handleAiEnhanceItem(): Promise<void> {
             outlineItems: buildAiOutlineContext(),
             worldviewEntries: buildAiWorldviewContext(),
             characters: buildAiCharactersContext(),
+            organizations: buildAiOrganizationsContext(),
             currentVolumeOutlineItems: appStore.outlineItems
               .filter((i) => i.volumeId === form.volumeId)
               .map((i) => ({ title: i.title, conflict: i.conflict, summary: i.summary })),
@@ -1587,14 +1611,23 @@ async function handleAiEnhanceItem(): Promise<void> {
       throw new Error(result.error ?? 'AI 补充失败，请检查模型配置')
     }
 
-    const suggested = result.result as { title?: string; wordTarget?: string; conflict?: string; summary?: string }
+    const suggested = result.result as {
+      title?: string; wordTarget?: string; conflict?: string; summary?: string
+      relatedCharacterIds?: string[]; relatedOrganizationIds?: string[]; relatedWorldviewIds?: string[]
+    }
     const suggestedWordTarget = normalizeOutlineItemWordTarget(suggested.wordTarget)
+    const suggestedCharacterIds = normalizeAiReferenceIds(suggested.relatedCharacterIds, new Set(appStore.characters.map((item) => item.id)))
+    const suggestedOrganizationIds = normalizeAiReferenceIds(suggested.relatedOrganizationIds, new Set(appStore.organizations.map((item) => item.id)))
+    const suggestedWorldviewIds = normalizeAiReferenceIds(suggested.relatedWorldviewIds, new Set(appStore.worldviewEntries.map((item) => item.id)))
 
     enhanceItemFields.value = [
       { key: 'title', label: '节点标题', type: 'text', original: form.title, suggested: suggested.title ?? '', changed: (suggested.title ?? '') !== form.title && Boolean(suggested.title?.trim()) },
       { key: 'wordTarget', label: '预估字数', type: 'text', original: form.wordTarget, suggested: suggestedWordTarget, changed: suggestedWordTarget !== form.wordTarget },
       { key: 'conflict', label: '核心冲突', type: 'text', original: form.conflict, suggested: suggested.conflict ?? '', changed: (suggested.conflict ?? '') !== form.conflict && Boolean(suggested.conflict?.trim()) },
-      { key: 'summary', label: '剧情描述', type: 'textarea', original: form.summary, suggested: suggested.summary ?? '', changed: (suggested.summary ?? '') !== form.summary && Boolean(suggested.summary?.trim()) }
+      { key: 'summary', label: '剧情描述', type: 'textarea', original: form.summary, suggested: suggested.summary ?? '', changed: (suggested.summary ?? '') !== form.summary && Boolean(suggested.summary?.trim()) },
+      { key: 'relatedCharacterIds', label: '关联角色', type: 'tags', original: form.relatedCharacterIds, suggested: suggestedCharacterIds, changed: JSON.stringify(suggestedCharacterIds) !== JSON.stringify(form.relatedCharacterIds) },
+      { key: 'relatedOrganizationIds', label: '关联组织', type: 'tags', original: form.relatedOrganizationIds, suggested: suggestedOrganizationIds, changed: JSON.stringify(suggestedOrganizationIds) !== JSON.stringify(form.relatedOrganizationIds) },
+      { key: 'relatedWorldviewIds', label: '关联设定', type: 'tags', original: form.relatedWorldviewIds, suggested: suggestedWorldviewIds, changed: JSON.stringify(suggestedWorldviewIds) !== JSON.stringify(form.relatedWorldviewIds) }
     ]
     enhanceItemVisible.value = true
   } catch (error) {
@@ -1607,6 +1640,9 @@ function handleEnhanceItemApply(accepted: Record<string, string | string[]>): vo
   if (accepted.wordTarget != null) form.wordTarget = normalizeOutlineItemWordTarget(accepted.wordTarget)
   if (accepted.conflict != null) form.conflict = accepted.conflict as string
   if (accepted.summary != null) form.summary = accepted.summary as string
+  if (accepted.relatedCharacterIds != null) form.relatedCharacterIds = accepted.relatedCharacterIds as string[]
+  if (accepted.relatedOrganizationIds != null) form.relatedOrganizationIds = accepted.relatedOrganizationIds as string[]
+  if (accepted.relatedWorldviewIds != null) form.relatedWorldviewIds = accepted.relatedWorldviewIds as string[]
   enhanceItemVisible.value = false
 }
 
@@ -1638,6 +1674,7 @@ async function handleAiEnhanceVolume(): Promise<void> {
             outlineItems: buildAiOutlineContext(),
             worldviewEntries: buildAiWorldviewContext(),
             characters: buildAiCharactersContext(),
+            organizations: buildAiOrganizationsContext(),
             worldviewTitles: appStore.worldviewEntries.map((e) => e.title),
             characterNames: appStore.characters.map((c) => c.name)
           }

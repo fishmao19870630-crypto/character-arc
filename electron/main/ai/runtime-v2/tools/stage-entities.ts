@@ -66,13 +66,17 @@ function renderCharacterText(c: {
 
 function renderOutlineText(item: {
   title?: string; conflict?: string; summary?: string; wordTarget?: string; volumeTitle?: string
+  relatedCharacterIds?: string[]; relatedOrganizationIds?: string[]; relatedWorldviewIds?: string[]
 }): string {
   return [
     item.volumeTitle ? `所属分卷：${item.volumeTitle}` : '',
     item.title ? `标题：${item.title}` : '',
     item.wordTarget ? `字数目标：${item.wordTarget}` : '',
     item.conflict ? `核心冲突：${item.conflict}` : '',
-    item.summary ? `摘要：${item.summary}` : ''
+    item.summary ? `摘要：${item.summary}` : '',
+    item.relatedCharacterIds?.length ? `关联角色 ID：${item.relatedCharacterIds.join(' / ')}` : '',
+    item.relatedOrganizationIds?.length ? `关联组织 ID：${item.relatedOrganizationIds.join(' / ')}` : '',
+    item.relatedWorldviewIds?.length ? `关联设定 ID：${item.relatedWorldviewIds.join(' / ')}` : ''
   ].filter(Boolean).join('\n')
 }
 
@@ -144,6 +148,14 @@ function readTags(value: unknown): string[] {
       return ''
     })
     .filter(Boolean)
+}
+
+function readReferenceIds(value: unknown, validIds: Set<string>): { ids: string[]; invalidIds: string[] } {
+  const ids = [...new Set(readTags(value))].slice(0, 12)
+  return {
+    ids: ids.filter((id) => validIds.has(id)),
+    invalidIds: ids.filter((id) => !validIds.has(id))
+  }
 }
 
 function readBoolean(input: Record<string, unknown>, key: string, fallback: boolean): boolean {
@@ -495,7 +507,7 @@ export function makeStageOutlineTool(deps: StageEntitiesToolDeps): Tool {
     definition: {
       name: 'stage_outline',
       description:
-        '暂存大纲节点新增、修改或删除，不直接写库。create 需提供 volume_id/title/summary；volume_id 必须先由 list_outline_volumes 获取，不允许省略。update 需提供 match_id 或 match_title，并提供要改的新字段；delete 需提供 match_id 或 match_title。',
+        '暂存大纲节点新增、修改或删除，不直接写库。create 需提供 volume_id/title/summary；volume_id 必须先由 list_outline_volumes 获取，不允许省略。新增或修改时应根据剧情填写 related_character_ids、related_organization_ids、related_worldview_ids。update 需提供 match_id 或 match_title，并提供要改的新字段；delete 需提供 match_id 或 match_title。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -507,6 +519,9 @@ export function makeStageOutlineTool(deps: StageEntitiesToolDeps): Tool {
           word_target: { type: 'string', description: '预估字数，如 "预估 3000字"。' },
           conflict: { type: 'string', description: '一句话核心冲突。' },
           summary: { type: 'string', description: '剧情推进摘要。create 必填；update 可选。' },
+          related_character_ids: { type: 'array', items: { type: 'string' }, description: '直接涉及的角色 ID，只能使用当前项目已有角色 ID；传空数组可清空。' },
+          related_organization_ids: { type: 'array', items: { type: 'string' }, description: '直接涉及的组织 ID，只能使用当前项目已有组织 ID；传空数组可清空。' },
+          related_worldview_ids: { type: 'array', items: { type: 'string' }, description: '直接涉及的世界观条目 ID，只能使用当前项目已有设定 ID；传空数组可清空。' },
           write_mode: WRITE_MODE_SCHEMA,
           reason: { type: 'string', description: '简短说明为什么要新增/修改/删除。' }
         },
@@ -523,6 +538,27 @@ export function makeStageOutlineTool(deps: StageEntitiesToolDeps): Tool {
         return { content: 'action 必须是 create、update 或 delete。', isError: true }
       }
 
+      const characterRefs = readReferenceIds(
+        input.related_character_ids,
+        new Set(view.workspace.characters.map((item) => item.id))
+      )
+      const organizationRefs = readReferenceIds(
+        input.related_organization_ids,
+        new Set(view.workspace.organizations.map((item) => item.id))
+      )
+      const worldviewRefs = readReferenceIds(
+        input.related_worldview_ids,
+        new Set(view.workspace.worldviewEntries.map((item) => item.id))
+      )
+      const invalidRefs = [
+        ...characterRefs.invalidIds,
+        ...organizationRefs.invalidIds,
+        ...worldviewRefs.invalidIds
+      ]
+      if (invalidRefs.length) {
+        return { content: `关联 ID 不属于当前项目：${invalidRefs.join('、')}。请先查询实体并使用有效 ID。`, isError: true }
+      }
+
       if (action === 'create') {
         const volumeId = readString(input, 'volume_id')
         if (!volumeId) {
@@ -537,7 +573,10 @@ export function makeStageOutlineTool(deps: StageEntitiesToolDeps): Tool {
           title: readString(input, 'title'),
           wordTarget: readString(input, 'word_target'),
           conflict: readString(input, 'conflict'),
-          summary: readString(input, 'summary')
+          summary: readString(input, 'summary'),
+          relatedCharacterIds: characterRefs.ids,
+          relatedOrganizationIds: organizationRefs.ids,
+          relatedWorldviewIds: worldviewRefs.ids
         }
         if (!payload.title || !payload.summary) {
           return { content: 'create 需要提供 title 和 summary。', isError: true }
@@ -598,7 +637,10 @@ export function makeStageOutlineTool(deps: StageEntitiesToolDeps): Tool {
         conflict: hasOwn(input, 'conflict') ? readString(input, 'conflict') : before.conflict,
         summary: hasOwn(input, 'summary')
           ? resolveLongText(writeMode, before.summary, readString(input, 'summary'))
-          : before.summary
+          : before.summary,
+        relatedCharacterIds: hasOwn(input, 'related_character_ids') ? characterRefs.ids : before.relatedCharacterIds,
+        relatedOrganizationIds: hasOwn(input, 'related_organization_ids') ? organizationRefs.ids : before.relatedOrganizationIds,
+        relatedWorldviewIds: hasOwn(input, 'related_worldview_ids') ? worldviewRefs.ids : before.relatedWorldviewIds
       }
       if (!payload.title || !payload.summary) {
         return { content: 'update 后的 title 和 summary 不能为空。', isError: true }

@@ -486,7 +486,7 @@ watch(
                   <div v-for="item in a.proposal.value.outlineCreates" :key="`oc-${item.title}`" class="ga-item">
                     <div class="ga-item__top"><strong>新增 · {{ item.title }}</strong><NTag v-if="item.wordTarget" size="small" round :bordered="false" type="info">{{ item.wordTarget }}</NTag></div>
                     <p>{{ item.summary }}</p>
-                    <ul class="ga-changes"><li v-if="item.conflict">冲突：{{ item.conflict }}</li></ul>
+                    <ul class="ga-changes"><li v-if="item.conflict">冲突：{{ item.conflict }}</li><li v-if="a.formatOutlineReferenceSummary(item)">{{ a.formatOutlineReferenceSummary(item) }}</li></ul>
                   </div>
                   <div v-for="(item, index) in a.proposal.value.outlineUpdates" :key="`ou-${index}-${item.matchTitle}`" class="ga-item">
                     <div class="ga-item__top">
@@ -504,7 +504,7 @@ watch(
                       placeholder="选择要更新的大纲节点"
                       @update:value="(value) => { a.outlineTargetMap.value[a.outlineUpdateKey(index, item.matchTitle)] = String(value ?? '') }"
                     />
-                    <ul class="ga-changes"><li v-if="item.title">新标题：{{ item.title }}</li><li v-if="item.wordTarget">目标字数：{{ item.wordTarget }}</li><li v-if="item.conflict">冲突：{{ item.conflict }}</li><li v-if="item.summary">摘要：{{ item.summary }}</li></ul>
+                    <ul class="ga-changes"><li v-if="item.title">新标题：{{ item.title }}</li><li v-if="item.wordTarget">目标字数：{{ item.wordTarget }}</li><li v-if="item.conflict">冲突：{{ item.conflict }}</li><li v-if="item.summary">摘要：{{ item.summary }}</li><li v-if="a.formatOutlineReferenceSummary(item)">{{ a.formatOutlineReferenceSummary(item) }}</li></ul>
                   </div>
                 </section>
 

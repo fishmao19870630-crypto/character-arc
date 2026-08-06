@@ -215,6 +215,10 @@ export type OutlineResult = {
   wordTarget: string
   conflict: string
   summary: string
+  /** 该节点直接涉及的角色、组织和世界观条目 ID。 */
+  relatedCharacterIds?: string[]
+  relatedOrganizationIds?: string[]
+  relatedWorldviewIds?: string[]
 }
 
 /** 批量大纲生成结果 */
@@ -283,6 +287,9 @@ export type GlobalAssistantProposalResult = {
     conflict?: string
     summary?: string
     volumeId?: string
+    relatedCharacterIds?: string[]
+    relatedOrganizationIds?: string[]
+    relatedWorldviewIds?: string[]
   }>
   notes: string[]
 }

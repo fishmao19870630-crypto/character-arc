@@ -1007,6 +1007,9 @@ export interface GlobalAssistantProposal {
     wordTarget: string
     conflict: string
     summary: string
+    relatedCharacterIds?: string[]
+    relatedOrganizationIds?: string[]
+    relatedWorldviewIds?: string[]
   }>
   outlineUpdates: Array<{
     matchTitle: string
@@ -1016,6 +1019,9 @@ export interface GlobalAssistantProposal {
     conflict?: string
     summary?: string
     volumeId?: string
+    relatedCharacterIds?: string[]
+    relatedOrganizationIds?: string[]
+    relatedWorldviewIds?: string[]
   }>
   notes: string[]
 }

@@ -31,7 +31,7 @@ const PROMPT_CAPABILITY_DEFINITIONS: Record<PromptCapabilityId, PromptCapability
 const TASK_DEFAULT_CAPABILITIES: Record<AiTaskName, PromptCapabilityId[]> = {
   'worldview-entry': ['settings', 'worldview', 'writing-style'],
   'character-card': ['settings', 'characters', 'relations', 'worldview', 'writing-style'],
-  'outline-item': ['settings', 'outline', 'worldview', 'characters', 'writing-style'],
+  'outline-item': ['settings', 'outline', 'worldview', 'characters', 'relations', 'writing-style'],
   'outline-batch': ['settings', 'outline', 'worldview', 'characters', 'relations', 'writing-style', 'project-skills'],
   'outline-chain': ['settings', 'outline', 'chapters', 'worldview', 'characters', 'relations', 'writing-style', 'project-skills'],
   'reference-style-chunk': ['settings', 'analysis', 'writing-style', 'outline', 'import-export', 'project-skills'],
@@ -63,7 +63,7 @@ const TASK_DEFAULT_CAPABILITIES: Record<AiTaskName, PromptCapabilityId[]> = {
   'spiral-validate': ['settings', 'worldview', 'characters', 'outline'],
   'character-enhance': ['settings', 'characters', 'relations', 'worldview', 'writing-style'],
   'worldview-enhance': ['settings', 'worldview', 'characters', 'writing-style'],
-  'outline-enhance': ['settings', 'outline', 'worldview', 'characters', 'writing-style'],
+  'outline-enhance': ['settings', 'outline', 'worldview', 'characters', 'relations', 'writing-style'],
   'relation-enhance': ['settings', 'characters', 'relations', 'worldview', 'writing-style'],
   'catalog-batch': ['settings', 'worldview', 'characters', 'relations', 'outline', 'inspiration', 'writing-style'],
   'continuation-import-chunk': ['settings', 'analysis', 'characters', 'outline'],

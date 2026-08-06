@@ -465,6 +465,15 @@ async function commitOutline(
   const conflict = stringField(payload, 'conflict')
   const wordTarget = stringField(payload, 'wordTarget') || stringField(payload, 'word_target', '预估 3000字')
   const volumeId = stringField(payload, 'volumeId') || stringField(payload, 'volume_id')
+  const relatedCharacterIds = [...new Set(stringArrayField(payload, 'relatedCharacterIds').length
+    ? stringArrayField(payload, 'relatedCharacterIds')
+    : stringArrayField(payload, 'related_character_ids'))].slice(0, 12)
+  const relatedOrganizationIds = [...new Set(stringArrayField(payload, 'relatedOrganizationIds').length
+    ? stringArrayField(payload, 'relatedOrganizationIds')
+    : stringArrayField(payload, 'related_organization_ids'))].slice(0, 12)
+  const relatedWorldviewIds = [...new Set(stringArrayField(payload, 'relatedWorldviewIds').length
+    ? stringArrayField(payload, 'relatedWorldviewIds')
+    : stringArrayField(payload, 'related_worldview_ids'))].slice(0, 12)
 
   if (!title || !summary) {
     return { changeId: change.id, ok: false, error: '大纲变更缺少 title 或 summary' }
@@ -478,6 +487,18 @@ async function commitOutline(
     return { changeId: change.id, ok: false, error: `大纲目标分卷不存在：${volumeId}` }
   }
 
+  const validCharacterIds = new Set((db.prepare('SELECT id FROM characters WHERE project_id = ?').all(projectId) as Array<{ id: string }>).map((row) => row.id))
+  const validOrganizationIds = new Set((db.prepare('SELECT id FROM organizations WHERE project_id = ?').all(projectId) as Array<{ id: string }>).map((row) => row.id))
+  const validWorldviewIds = new Set((db.prepare('SELECT id FROM worldview_entries WHERE project_id = ?').all(projectId) as Array<{ id: string }>).map((row) => row.id))
+  const invalidReferenceIds = [
+    ...relatedCharacterIds.filter((id) => !validCharacterIds.has(id)),
+    ...relatedOrganizationIds.filter((id) => !validOrganizationIds.has(id)),
+    ...relatedWorldviewIds.filter((id) => !validWorldviewIds.has(id))
+  ]
+  if (invalidReferenceIds.length) {
+    return { changeId: change.id, ok: false, error: `大纲关联 ID 不属于当前项目：${invalidReferenceIds.join('、')}` }
+  }
+
   if (change.action === 'create') {
     const duplicate = db.prepare('SELECT id FROM outline_items WHERE project_id = ? AND TRIM(title) = ?')
       .get(projectId, title) as { id: string } | undefined
@@ -486,9 +507,16 @@ async function commitOutline(
     const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS value FROM outline_items WHERE project_id = ? AND volume_id = ?')
       .get(projectId, volumeId) as { value: number } | undefined
     db.prepare(`
-      INSERT INTO outline_items (id, project_id, volume_id, title, word_target, conflict, summary, status, sort_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, projectId, volumeId, title, wordTarget, conflict, summary, 'planned', Number(maxOrder?.value ?? -1) + 1)
+      INSERT INTO outline_items (
+        id, project_id, volume_id, title, word_target, conflict, summary,
+        related_character_ids_json, related_organization_ids_json, related_worldview_ids_json,
+        status, sort_order
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id, projectId, volumeId, title, wordTarget, conflict, summary,
+      JSON.stringify(relatedCharacterIds), JSON.stringify(relatedOrganizationIds), JSON.stringify(relatedWorldviewIds),
+      'planned', Number(maxOrder?.value ?? -1) + 1
+    )
     return { changeId: change.id, ok: true, entityId: id }
   }
 
@@ -504,9 +532,14 @@ async function commitOutline(
 
   const result = db.prepare(`
     UPDATE outline_items
-    SET volume_id = ?, title = ?, word_target = ?, conflict = ?, summary = ?
+    SET volume_id = ?, title = ?, word_target = ?, conflict = ?, summary = ?,
+      related_character_ids_json = ?, related_organization_ids_json = ?, related_worldview_ids_json = ?
     WHERE id = ? AND project_id = ?
-  `).run(volumeId, title, wordTarget, conflict, summary, change.entityId, projectId)
+  `).run(
+    volumeId, title, wordTarget, conflict, summary,
+    JSON.stringify(relatedCharacterIds), JSON.stringify(relatedOrganizationIds), JSON.stringify(relatedWorldviewIds),
+    change.entityId, projectId
+  )
   if (result.changes === 0) {
     return { changeId: change.id, ok: false, error: `大纲节点不存在：${change.entityId}` }
   }

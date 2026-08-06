@@ -847,6 +847,43 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
     return `${currentText}\n\n${incomingText}`
   }
 
+  function validOutlineReferenceIds(
+    ids: string[] | undefined,
+    validIds: Set<string>
+  ): string[] | undefined {
+    if (!Array.isArray(ids)) return undefined
+    return [...new Set(ids.map((id) => String(id).trim()).filter((id) => id && validIds.has(id)))]
+  }
+
+  function outlineReferenceLines(item: {
+    relatedCharacterIds?: string[]
+    relatedOrganizationIds?: string[]
+    relatedWorldviewIds?: string[]
+  }): string[] {
+    const characterNames = (item.relatedCharacterIds ?? [])
+      .map((id) => appStore.characters.find((entry) => entry.id === id)?.name)
+      .filter((name): name is string => Boolean(name))
+    const organizationNames = (item.relatedOrganizationIds ?? [])
+      .map((id) => appStore.organizations.find((entry) => entry.id === id)?.name)
+      .filter((name): name is string => Boolean(name))
+    const worldviewTitles = (item.relatedWorldviewIds ?? [])
+      .map((id) => appStore.worldviewEntries.find((entry) => entry.id === id)?.title)
+      .filter((title): title is string => Boolean(title))
+    return [
+      characterNames.length ? `关联角色：${characterNames.join('、')}` : '',
+      organizationNames.length ? `关联组织：${organizationNames.join('、')}` : '',
+      worldviewTitles.length ? `关联设定：${worldviewTitles.join('、')}` : ''
+    ].filter(Boolean)
+  }
+
+  function formatOutlineReferenceSummary(item: {
+    relatedCharacterIds?: string[]
+    relatedOrganizationIds?: string[]
+    relatedWorldviewIds?: string[]
+  }): string {
+    return outlineReferenceLines(item).join('；')
+  }
+
   function trimProposal(current: GlobalAssistantProposal): GlobalAssistantProposal | null {
     const next: GlobalAssistantProposal = {
       summary: current.summary,
@@ -1051,7 +1088,8 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
           `标题：${item.title}`,
           `目标字数：${item.wordTarget}`,
           `冲突：${item.conflict}`,
-          `摘要：${item.summary}`
+          `摘要：${item.summary}`,
+          ...outlineReferenceLines(item)
         ].filter(Boolean).join('\n'),
         reason: alreadyExists
           ? `同名大纲节点「${item.title}」已存在，请忽略或手动更新`
@@ -1077,7 +1115,8 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
               `标题：${target.title}`,
               `目标字数：${target.wordTarget}`,
               `冲突：${target.conflict}`,
-              `摘要：${target.summary}`
+              `摘要：${target.summary}`,
+              ...outlineReferenceLines(target)
             ].filter(Boolean).join('\n')
           : `未匹配到目标：${item.matchTitle}`,
         newText: [
@@ -1085,7 +1124,12 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
           `标题：${item.title || target?.title || item.matchTitle}`,
           `目标字数：${item.wordTarget || target?.wordTarget || ''}`,
           `冲突：${item.conflict || target?.conflict || ''}`,
-          `摘要：${mergedSummary}`
+          `摘要：${mergedSummary}`,
+          ...outlineReferenceLines({
+            relatedCharacterIds: item.relatedCharacterIds ?? target?.relatedCharacterIds,
+            relatedOrganizationIds: item.relatedOrganizationIds ?? target?.relatedOrganizationIds,
+            relatedWorldviewIds: item.relatedWorldviewIds ?? target?.relatedWorldviewIds
+          })
         ].filter(Boolean).join('\n'),
         reason: item.volumeId && !volume ? '目标分卷无效，无法写回' : item.reason,
         canApply: Boolean(target) && (!item.volumeId || Boolean(volume))
@@ -1384,6 +1428,9 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
     const current = proposal.value
     if (!current) return
 
+    const characterIds = new Set(appStore.characters.map((entry) => entry.id))
+    const organizationIds = new Set(appStore.organizations.map((entry) => entry.id))
+    const worldviewIds = new Set(appStore.worldviewEntries.map((entry) => entry.id))
     let appliedCount = 0
     const appliedTitles: string[] = []
     const remainingCreates: GlobalAssistantProposal['outlineCreates'] = []
@@ -1401,6 +1448,9 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
         wordTarget: item.wordTarget,
         conflict: item.conflict,
         summary: item.summary,
+        relatedCharacterIds: validOutlineReferenceIds(item.relatedCharacterIds, characterIds),
+        relatedOrganizationIds: validOutlineReferenceIds(item.relatedOrganizationIds, organizationIds),
+        relatedWorldviewIds: validOutlineReferenceIds(item.relatedWorldviewIds, worldviewIds),
         status: 'planned'
       })
       appliedCount += 1
@@ -1421,7 +1471,16 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
         title: item.title,
         wordTarget: item.wordTarget,
         conflict: item.conflict,
-        summary: mergeLongTextForIngest(target.summary, item.summary)
+        summary: mergeLongTextForIngest(target.summary, item.summary),
+        ...(item.relatedCharacterIds !== undefined
+          ? { relatedCharacterIds: validOutlineReferenceIds(item.relatedCharacterIds, characterIds) }
+          : {}),
+        ...(item.relatedOrganizationIds !== undefined
+          ? { relatedOrganizationIds: validOutlineReferenceIds(item.relatedOrganizationIds, organizationIds) }
+          : {}),
+        ...(item.relatedWorldviewIds !== undefined
+          ? { relatedWorldviewIds: validOutlineReferenceIds(item.relatedWorldviewIds, worldviewIds) }
+          : {})
       })
       appliedCount += 1
       appliedTitles.push(item.title || target.title)
@@ -1989,6 +2048,7 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
     resolveCharacterTarget,
     resolveOrganizationTarget,
     resolveOutlineTarget,
+    formatOutlineReferenceSummary,
     hasWorldviewApplyTarget,
     hasCharacterApplyTarget,
     hasOrganizationApplyTarget,

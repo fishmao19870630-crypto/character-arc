@@ -15,7 +15,10 @@ const outlineItemSchema = z.object({
   title: stringField,
   wordTarget: stringField,
   conflict: stringField,
-  summary: stringField
+  summary: stringField,
+  relatedCharacterIds: stringList.optional(),
+  relatedOrganizationIds: stringList.optional(),
+  relatedWorldviewIds: stringList.optional()
 })
 
 const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
@@ -105,7 +108,10 @@ const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
       wordTarget: stringField.optional(),
       conflict: stringField.optional(),
       summary: stringField.optional(),
-      volumeId: stringField.optional()
+      volumeId: stringField.optional(),
+      relatedCharacterIds: stringList.optional(),
+      relatedOrganizationIds: stringList.optional(),
+      relatedWorldviewIds: stringList.optional()
     })),
     notes: stringList
   }),
