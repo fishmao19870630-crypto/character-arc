@@ -172,6 +172,9 @@ export async function ensureWorkspaceDb(): Promise<DatabaseSync> {
       word_target TEXT NOT NULL,
       conflict TEXT NOT NULL,
       summary TEXT NOT NULL,
+      related_character_ids_json TEXT NOT NULL DEFAULT '[]',
+      related_organization_ids_json TEXT NOT NULL DEFAULT '[]',
+      related_worldview_ids_json TEXT NOT NULL DEFAULT '[]',
       sort_order INTEGER NOT NULL,
       FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
       FOREIGN KEY (volume_id) REFERENCES outline_volumes (id) ON DELETE CASCADE
@@ -361,6 +364,7 @@ export async function ensureWorkspaceDb(): Promise<DatabaseSync> {
   ensureProjectColumns(db)
   ensureProjectScopedColumns(db)
   ensureVolumeColumns(db)
+  ensureOutlineItemColumns(db)
   ensureWorkflowDocumentColumns(db)
   ensureKnowledgeDocumentSchema(db)
   initStoryStateSchema(db)
@@ -525,6 +529,23 @@ function ensureVolumeColumns(db: DatabaseSync): void {
   const outlineColumnNames = new Set(outlineColumns.map((column) => column.name))
   if (!outlineColumnNames.has('status')) {
     db.exec(`ALTER TABLE outline_items ADD COLUMN status TEXT NOT NULL DEFAULT 'planned';`)
+  }
+}
+
+function ensureOutlineItemColumns(db: DatabaseSync): void {
+  const columns = db.prepare(`PRAGMA table_info('outline_items')`).all() as Array<{ name: string }>
+  const columnNames = new Set(columns.map((column) => column.name))
+
+  if (!columnNames.has('related_character_ids_json')) {
+    db.exec(`ALTER TABLE outline_items ADD COLUMN related_character_ids_json TEXT NOT NULL DEFAULT '[]';`)
+  }
+
+  if (!columnNames.has('related_organization_ids_json')) {
+    db.exec(`ALTER TABLE outline_items ADD COLUMN related_organization_ids_json TEXT NOT NULL DEFAULT '[]';`)
+  }
+
+  if (!columnNames.has('related_worldview_ids_json')) {
+    db.exec(`ALTER TABLE outline_items ADD COLUMN related_worldview_ids_json TEXT NOT NULL DEFAULT '[]';`)
   }
 }
 
@@ -891,10 +912,27 @@ export function readWorkspaceSnapshot(db: DatabaseSync): WorkspacePayload | null
   })) as Array<WorkspacePayload['workspaces'][string]['outlineVolumes'][number] & { projectId: string }>
 
   const outlineItems = db.prepare(`
-    SELECT project_id AS projectId, volume_id AS volumeId, id, title, word_target AS wordTarget, conflict, summary, status, sort_order AS sortOrder
+    SELECT project_id AS projectId, volume_id AS volumeId, id, title, word_target AS wordTarget, conflict, summary,
+      related_character_ids_json AS relatedCharacterIdsJson,
+      related_organization_ids_json AS relatedOrganizationIdsJson,
+      related_worldview_ids_json AS relatedWorldviewIdsJson,
+      status, sort_order AS sortOrder
     FROM outline_items
     ORDER BY project_id ASC, sort_order ASC
-  `).all() as Array<WorkspacePayload['workspaces'][string]['outlineItems'][number] & { projectId: string }>
+  `).all().map((row) => ({
+    projectId: row.projectId as string,
+    id: row.id as string,
+    volumeId: row.volumeId as string,
+    title: row.title as string,
+    wordTarget: row.wordTarget as string,
+    conflict: row.conflict as string,
+    summary: row.summary as string,
+    relatedCharacterIds: parseJson(row.relatedCharacterIdsJson as string, [] as string[]),
+    relatedOrganizationIds: parseJson(row.relatedOrganizationIdsJson as string, [] as string[]),
+    relatedWorldviewIds: parseJson(row.relatedWorldviewIdsJson as string, [] as string[]),
+    status: row.status as WorkspacePayload['workspaces'][string]['outlineItems'][number]['status'],
+    sortOrder: row.sortOrder as number
+  })) as Array<WorkspacePayload['workspaces'][string]['outlineItems'][number] & { projectId: string }>
 
   const chapters = db.prepare(`
     SELECT project_id AS projectId, volume_id AS volumeId, outline_item_id AS outlineItemId, id, title, summary, status, word_target AS wordTarget, content
@@ -1321,8 +1359,12 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
     `)
 
     const insertOutline = db.prepare(`
-      INSERT OR REPLACE INTO outline_items (id, project_id, volume_id, title, word_target, conflict, summary, status, sort_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO outline_items (
+        id, project_id, volume_id, title, word_target, conflict, summary,
+        related_character_ids_json, related_organization_ids_json, related_worldview_ids_json,
+        status, sort_order
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
 
     const insertChapter = db.prepare(`
@@ -1493,6 +1535,9 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
           item.wordTarget,
           item.conflict,
           item.summary,
+          JSON.stringify(item.relatedCharacterIds ?? []),
+          JSON.stringify(item.relatedOrganizationIds ?? []),
+          JSON.stringify(item.relatedWorldviewIds ?? []),
           item.status,
           item.sortOrder ?? index
         )

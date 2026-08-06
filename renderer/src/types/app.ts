@@ -491,6 +491,12 @@ export interface OutlineItem {
   conflict: string
   /** 剧情推进摘要 */
   summary: string
+  /** 相关角色 ID 列表 */
+  relatedCharacterIds?: string[]
+  /** 相关组织 ID 列表 */
+  relatedOrganizationIds?: string[]
+  /** 相关世界观设定 ID 列表 */
+  relatedWorldviewIds?: string[]
   /** 节点推进状态：点子 / 已规划 / 写作中 / 已完成 */
   status: OutlineItemStatus
   /** 排序权重 */
@@ -527,6 +533,9 @@ export interface OutlineImportPlanEntry {
     wordTarget?: string
     conflict?: string
     summary?: string
+    relatedCharacterIds?: string[]
+    relatedOrganizationIds?: string[]
+    relatedWorldviewIds?: string[]
     status?: OutlineItemStatus
   }
 }

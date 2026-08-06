@@ -257,6 +257,9 @@ export type WorkspacePayload = {
         wordTarget: string
         conflict: string
         summary: string
+        relatedCharacterIds?: string[]
+        relatedOrganizationIds?: string[]
+        relatedWorldviewIds?: string[]
         status: 'idea' | 'planned' | 'drafting' | 'done'
         sortOrder: number
       }>
@@ -425,6 +428,9 @@ export type LegacyWorkspacePayload = Omit<WorkspacePayload, 'workspaces'> & {
     wordTarget: string
     conflict: string
     summary: string
+    relatedCharacterIds?: string[]
+    relatedOrganizationIds?: string[]
+    relatedWorldviewIds?: string[]
     status?: 'idea' | 'planned' | 'drafting' | 'done'
     sortOrder?: number
   }>

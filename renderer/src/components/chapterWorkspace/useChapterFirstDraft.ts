@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import type { Ref } from 'vue'
-import { buildChapterFirstDraftContext, type ChapterFirstDraftContextInput } from '@/features/ai/chapterAssistantContext'
+import { buildChapterFirstDraftContext, buildOutlineItemContext, type ChapterFirstDraftContextInput } from '@/features/ai/chapterAssistantContext'
 import {
   ensureEditorHtmlContent,
   getChapterPreviewText,
@@ -105,6 +105,38 @@ function formatMemoForRepair(memo: Record<string, unknown>): string {
   if (Array.isArray(memo.payoffs) && memo.payoffs.length > 0) parts.push(`兑现：${memo.payoffs.join('；')}`)
   if (Array.isArray(memo.doNotDo) && memo.doNotDo.length > 0) parts.push(`红线：${memo.doNotDo.join('；')}`)
   return parts.join('\n')
+}
+
+function normalizeAuditWordCount(
+  audit: ChapterAuditPayload,
+  targetWordCount: number,
+  measuredWordCount: number
+): ChapterAuditPayload {
+  const target = Math.max(Number(targetWordCount) || 0, 1)
+  const measured = Math.max(Number(measuredWordCount) || 0, 0)
+  const min = Math.round(target * 0.9)
+  const max = Math.round(target * 1.1)
+  const issues = audit.issues.filter((issue) => issue.category !== 'word-count')
+
+  if (measured < min || measured > max) {
+    issues.push({
+      severity: 'critical',
+      category: 'word-count',
+      ref: `程序测量 ${measured} 字，目标 ${target} 字，建议范围 ${min}-${max} 字`,
+      hint: measured < min
+        ? `正文低于目标范围，需要补足约 ${min - measured} 字，并优先扩展关键冲突、行动和情绪转折。`
+        : `正文超过目标范围，需要压缩约 ${measured - max} 字，优先删减重复描写和低推进段落。`
+    })
+  }
+
+  const criticalCount = issues.filter((issue) => issue.severity === 'critical').length
+  const warningCount = issues.filter((issue) => issue.severity === 'warning').length
+  return {
+    ...audit,
+    wordCount: measured,
+    issues,
+    pass: criticalCount === 0 && warningCount <= 2
+  }
 }
 
 /** 把单个参考作品的拆书分析整理成一段风格提示文本。优先用作品自带的 analysis，兜底用拆书总纲文档。 */
@@ -227,6 +259,7 @@ export function useChapterFirstDraft(): {
 
   const auditResult = ref<ChapterAuditPayload | null>(null)
   const isAuditing = ref(false)
+  const activeTargetWordCount = ref(0)
 
   const elapsedSeconds = ref(0)
   const isStreaming = ref(false)
@@ -249,7 +282,7 @@ export function useChapterFirstDraft(): {
   }
 
   function recompute(): void {
-    const target = Math.max(parseChapterWordTarget(appStore.selectedChapter?.wordTarget), 1)
+    const target = Math.max(activeTargetWordCount.value || parseChapterWordTarget(appStore.selectedChapter?.wordTarget), 1)
     const words = streamingCharCount.value || streamingContent.value.trim().length
     if (!isGenerating.value) {
       progressPercent.value = 0
@@ -298,6 +331,7 @@ export function useChapterFirstDraft(): {
     resolveStream = null
     rejectStream = null
     streamingCharCount.value = 0
+    activeTargetWordCount.value = 0
     progressFloor.value = finalLabel.includes('完成') ? 100 : progressFloor.value
     progressPercent.value = finalLabel.includes('完成') ? 100 : progressPercent.value
     progressText.value = finalLabel || progressText.value
@@ -488,6 +522,7 @@ export function useChapterFirstDraft(): {
     isStopping.value = false
     isStreaming.value = false
     streamingContent.value = ''
+    activeTargetWordCount.value = Math.max(config.targetWordCount || parseChapterWordTarget(chapter.wordTarget), 1)
     progressFloor.value = 0
     progressPercent.value = 0
     progressText.value = ''
@@ -512,7 +547,7 @@ export function useChapterFirstDraft(): {
           onCancel: () => { void stop() }
         },
         async () => {
-          const targetWordCount = config.targetWordCount || parseChapterWordTarget(chapter.wordTarget)
+          const targetWordCount = activeTargetWordCount.value
           const steps = resolveFirstDraftSteps(config)
           let latestAuditResult: ChapterAuditPayload | null = null
           const resolveStepProjectSkills = async (stepId: FirstDraftStepId) => {
@@ -625,14 +660,11 @@ export function useChapterFirstDraft(): {
               description: r.description,
               intensity: r.intensity
             })),
-            currentOutlineItem: currentOutlineItem
-              ? {
-                  title: currentOutlineItem.title,
-                  wordTarget: currentOutlineItem.wordTarget,
-                  conflict: currentOutlineItem.conflict,
-                  summary: currentOutlineItem.summary
-                }
-              : null,
+            currentOutlineItem: buildOutlineItemContext(currentOutlineItem, {
+              characters: appStore.characters,
+              organizations: appStore.organizations,
+              worldviewEntries: appStore.worldviewEntries
+            }),
             outlineChapterSplit,
             outlineItems: outlineItemsForCurrentChapter
               .map((item) => ({
@@ -700,14 +732,18 @@ export function useChapterFirstDraft(): {
             characterRelationships: appStore.characterRelationships,
             organizationMemberships: appStore.organizationMemberships,
             inspirationEntries: appStore.inspirationEntries,
-            currentOutlineItem,
+            currentOutlineItem: buildOutlineItemContext(currentOutlineItem, {
+              characters: appStore.characters,
+              organizations: appStore.organizations,
+              worldviewEntries: appStore.worldviewEntries
+            }),
             outlineChapterSplit,
             outlineItems: outlineItemsForCurrentChapter,
             plotThreads: appStore.plotThreads,
             knowledgeDocuments: appStore.projectConstraints,
             chapterContent: '',
             targetWordCount,
-            userPrompt: appendStepPrompt(`请生成这一章的完整初稿，目标字数约 ${targetWordCount} 字（参考值，优先保证情节自然完整）。如果当前正文为空，就从零起稿；如果当前正文不为空，也按整章重写处理，而不是续写。${config.userPrompt ? `\n\n补充要求：${config.userPrompt}` : ''}`, steps.draft.userPrompt),
+            userPrompt: appendStepPrompt(`请生成这一章的完整初稿，目标字数为 ${targetWordCount} 字，这是本次生成的硬约束；请在完成剧情的同时主动控制篇幅。如果当前正文为空，就从零起稿；如果当前正文不为空，也按整章重写处理，而不是续写。${config.userPrompt ? `\n\n补充要求：${config.userPrompt}` : ''}`, steps.draft.userPrompt),
             ...(draftProjectSkills !== undefined ? { projectSkills: draftProjectSkills } : {}),
             chapterMemo,
             recentEndingsTrail,
@@ -749,16 +785,19 @@ export function useChapterFirstDraft(): {
                   chapterTitle: chapter.title,
                   targetWordCount,
                   draftText: fullText,
+                  measuredWordCount: fullText.trim().length,
                   chapterMemo,
                   ...(auditProjectSkills !== undefined ? { projectSkills: auditProjectSkills } : {}),
                   userPrompt: steps.audit.userPrompt
                 })
                 const auditResp = auditStream.result as { audit?: ChapterAuditPayload } | undefined
                 if (auditResp?.audit) {
-                  latestAuditResult = auditResp.audit
+                  const measuredWordCount = fullText.trim().length
+                  const normalizedAudit = normalizeAuditWordCount(auditResp.audit, targetWordCount, measuredWordCount)
+                  latestAuditResult = normalizedAudit
 
-                  const criticalIssues = auditResp.audit.issues.filter((i) => i.severity === 'critical')
-                  if (steps.repair.enabled && !auditResp.audit.pass && criticalIssues.length > 0) {
+                  const criticalIssues = normalizedAudit.issues.filter((i) => i.severity === 'critical')
+                  if (steps.repair.enabled && !normalizedAudit.pass && criticalIssues.length > 0) {
                     auditResult.value = null
                     isAuditing.value = false
                     executionLabel.value = `审计发现 ${criticalIssues.length} 个关键问题，正在自动修复...`
@@ -772,6 +811,8 @@ export function useChapterFirstDraft(): {
                         chapterTitle: chapter.title,
                         chapterSummary: chapter.summary,
                         chapterContent: fullText,
+                        targetWordCount,
+                        measuredWordCount,
                         projectTitle: project.title,
                         projectGenre: project.genre,
                         writingStyleLabel: project.writingStylePresetId,
@@ -788,12 +829,12 @@ export function useChapterFirstDraft(): {
                         updateProgress(70, `已自动修复 ${criticalIssues.length} 个问题`)
                       }
                     } catch (error) {
-                      auditResult.value = auditResp.audit
+                      auditResult.value = normalizedAudit
                       handleStepError('repair', error)
                     }
                   } else {
-                    auditResult.value = auditResp.audit
-                    updateProgress(auditResp.audit.pass ? 60 : 59, auditResp.audit.pass ? '章节审计通过' : '章节审计完成，未触发自动修复')
+                    auditResult.value = normalizedAudit
+                    updateProgress(normalizedAudit.pass ? 60 : 59, normalizedAudit.pass ? '章节审计通过' : '章节审计完成，未触发自动修复')
                   }
                 }
               } catch (error) {

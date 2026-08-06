@@ -57,6 +57,9 @@ const form = reactive({
   wordTarget: '',
   conflict: '',
   summary: '',
+  relatedCharacterIds: [] as string[],
+  relatedOrganizationIds: [] as string[],
+  relatedWorldviewIds: [] as string[],
   status: 'planned' as OutlineItemStatus
 })
 // 分卷编辑表单
@@ -293,6 +296,24 @@ const volumeOptions = computed<SelectOption[]>(() =>
   appStore.outlineVolumes.map((volume, index) => ({
     label: formatVolumeLabel(volume, index, 'formal'),
     value: volume.id
+  }))
+)
+const characterOptions = computed<SelectOption[]>(() =>
+  appStore.characters.map((character) => ({
+    label: [character.name, character.role].filter(Boolean).join(' · ') || character.name,
+    value: character.id
+  }))
+)
+const organizationOptions = computed<SelectOption[]>(() =>
+  appStore.organizations.map((organization) => ({
+    label: [organization.name, organization.type].filter(Boolean).join(' · ') || organization.name,
+    value: organization.id
+  }))
+)
+const worldviewOptions = computed<SelectOption[]>(() =>
+  appStore.worldviewEntries.map((entry) => ({
+    label: [entry.title, entry.type].filter(Boolean).join(' · ') || entry.title,
+    value: entry.id
   }))
 )
 const outlineStatusOptions: SelectOption[] = [
@@ -596,6 +617,9 @@ function openEditor(item?: OutlineItem): void {
   form.wordTarget = item?.wordTarget ?? '3000'
   form.conflict = item?.conflict ?? ''
   form.summary = item?.summary ?? ''
+  form.relatedCharacterIds = [...(item?.relatedCharacterIds ?? [])]
+  form.relatedOrganizationIds = [...(item?.relatedOrganizationIds ?? [])]
+  form.relatedWorldviewIds = [...(item?.relatedWorldviewIds ?? [])]
   form.status = item?.status ?? 'planned'
   editorVisible.value = true
 }
@@ -2101,6 +2125,39 @@ watch(
               <n-input v-model:value="form.wordTarget" placeholder="例如：3200">
                 <template #suffix>字</template>
               </n-input>
+            </n-form-item>
+            <n-form-item label="关联角色">
+              <n-select
+                v-model:value="form.relatedCharacterIds"
+                :options="characterOptions"
+                multiple
+                filterable
+                clearable
+                max-tag-count="responsive"
+                placeholder="可选，指定这一节点会出现或重点影响的角色"
+              />
+            </n-form-item>
+            <n-form-item label="关联组织">
+              <n-select
+                v-model:value="form.relatedOrganizationIds"
+                :options="organizationOptions"
+                multiple
+                filterable
+                clearable
+                max-tag-count="responsive"
+                placeholder="可选，指定这一节点会涉及的组织"
+              />
+            </n-form-item>
+            <n-form-item label="关联设定">
+              <n-select
+                v-model:value="form.relatedWorldviewIds"
+                :options="worldviewOptions"
+                multiple
+                filterable
+                clearable
+                max-tag-count="responsive"
+                placeholder="可选，指定这一节点依赖的世界观设定"
+              />
             </n-form-item>
             <n-form-item label="推进状态">
               <n-select v-model:value="form.status" :options="outlineStatusOptions" placeholder="选择当前节点所处阶段" />

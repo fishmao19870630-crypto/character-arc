@@ -58,9 +58,17 @@ function normalizeOutlineItems(outlineItems?: OutlineItem[]): OutlineItem[] {
 
   return sortedItems.map(({ item }, index) => ({
     ...item,
+    relatedCharacterIds: normalizeOutlineReferenceIds(item.relatedCharacterIds),
+    relatedOrganizationIds: normalizeOutlineReferenceIds(item.relatedOrganizationIds),
+    relatedWorldviewIds: normalizeOutlineReferenceIds(item.relatedWorldviewIds),
     status: normalizeOutlineItemStatus(item.status),
     sortOrder: index
   }))
+}
+
+export function normalizeOutlineReferenceIds(value?: string[]): string[] {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value.map((id) => String(id).trim()).filter(Boolean).slice(0, 8))]
 }
 
 function normalizeOutlineItemStatus(status?: string): OutlineItemStatus {

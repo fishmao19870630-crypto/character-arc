@@ -34,7 +34,7 @@ const AUDIT_REPAIR_SYSTEM = `你是章节修复专家。质量审计已经完成
 - 最小改动原则：只修改审计指出的问题段落，保留其他段落不动
 - 保持前后文衔接：修复后的内容必须与未修改部分无缝衔接
 - 尊重已建立设定：修复不能引入新的设定矛盾
-- 字数约束：修复后总字数与原文偏差不超过 ±10%
+- 字数约束：默认让修复后总字数与原文偏差不超过 ±10%；如果审计问题包含 word-count，则优先把修复稿调整到本次目标字数范围内
 - 保留作者意图：修复方向是让原有意图更好地表达，而非改变方向
 
 【输出格式】
@@ -114,6 +114,8 @@ const handler: TaskHandler = {
     const retrievalBlock = knowledgeBlock ? `\n\n检索到的项目记忆与参考资料：\n${knowledgeBlock}` : ''
     const auditIssuesBlock = formatAuditIssues(context.auditIssues)
     const isAuditDriven = Boolean(auditIssuesBlock)
+    const targetWordCount = Number(context.targetWordCount ?? 0)
+    const measuredWordCount = Number(context.measuredWordCount ?? 0)
     const projectSkillsBlock = formatProjectSkillsContext(context.projectSkills)
     const effectiveSkillsBlock = [projectSkillsBlock, skillsBlock].filter(Boolean).join('\n\n')
 
@@ -128,6 +130,8 @@ const handler: TaskHandler = {
       `\n风格要求：${String(context.writingStylePrompt ?? '暂无')}`,
       `\n当前章节标题：${String(context.chapterTitle ?? '')}`,
       `\n当前章节摘要：${String(context.chapterSummary ?? '')}`,
+      Number.isFinite(targetWordCount) && targetWordCount > 0 ? `\n目标字数：${targetWordCount} 字` : '',
+      Number.isFinite(measuredWordCount) && measuredWordCount > 0 ? `\n当前程序测量字数：${measuredWordCount} 字` : '',
       `\n当前章节正文：\n${String(context.chapterContent ?? '')}`
     ]
 

@@ -17,7 +17,7 @@ import {
   type OutlineDropPosition
 } from '@/features/workspace/outlineReorder'
 import { getThemePreset } from '@/theme/presets'
-import { createEmptyWorkspace, normalizeGlobalAssistantProposal, mergeGlobalAssistantProposals } from '@/features/workspace/projectWorkspace'
+import { createEmptyWorkspace, normalizeGlobalAssistantProposal, mergeGlobalAssistantProposals, normalizeOutlineReferenceIds } from '@/features/workspace/projectWorkspace'
 import { createWorkspacePersistence } from '@/features/workspace/persistence'
 import {
   filterKnowledgeDocumentsForProject,
@@ -2137,6 +2137,9 @@ export const useAppStore = defineStore('app', () => {
         summary:
           payload?.summary?.trim() ||
           '这里是新的剧情大纲节点草稿，可以继续补充剧情推进、角色目标和关键转折。',
+        relatedCharacterIds: normalizeOutlineReferenceIds(payload?.relatedCharacterIds),
+        relatedOrganizationIds: normalizeOutlineReferenceIds(payload?.relatedOrganizationIds),
+        relatedWorldviewIds: normalizeOutlineReferenceIds(payload?.relatedWorldviewIds),
         status: payload?.status || 'planned',
         sortOrder: payload?.sortOrder ?? workspace.outlineItems.length
       }
@@ -2171,6 +2174,9 @@ export const useAppStore = defineStore('app', () => {
         summary:
           payload.summary?.trim() ||
           '这里是新的剧情大纲节点草稿，可以继续补充剧情推进、角色目标和关键转折。',
+        relatedCharacterIds: normalizeOutlineReferenceIds(payload.relatedCharacterIds),
+        relatedOrganizationIds: normalizeOutlineReferenceIds(payload.relatedOrganizationIds),
+        relatedWorldviewIds: normalizeOutlineReferenceIds(payload.relatedWorldviewIds),
         status: payload.status || 'planned',
         sortOrder: anchorIndex + index + 1
       }))
@@ -2250,6 +2256,9 @@ export const useAppStore = defineStore('app', () => {
             wordTarget: entry.item.wordTarget?.trim() || existing.wordTarget,
             conflict: entry.item.conflict?.trim() || existing.conflict,
             summary: entry.item.summary?.trim() || existing.summary,
+            relatedCharacterIds: normalizeOutlineReferenceIds(entry.item.relatedCharacterIds ?? existing.relatedCharacterIds),
+            relatedOrganizationIds: normalizeOutlineReferenceIds(entry.item.relatedOrganizationIds ?? existing.relatedOrganizationIds),
+            relatedWorldviewIds: normalizeOutlineReferenceIds(entry.item.relatedWorldviewIds ?? existing.relatedWorldviewIds),
             status: entry.item.status || existing.status
           }
           result.overwritten += 1
@@ -2277,6 +2286,9 @@ export const useAppStore = defineStore('app', () => {
             wordTarget: entry.item.wordTarget?.trim() || '3000',
             conflict: entry.item.conflict?.trim() || '待补充核心冲突',
             summary: entry.item.summary?.trim() || '待补充剧情摘要',
+            relatedCharacterIds: normalizeOutlineReferenceIds(entry.item.relatedCharacterIds),
+            relatedOrganizationIds: normalizeOutlineReferenceIds(entry.item.relatedOrganizationIds),
+            relatedWorldviewIds: normalizeOutlineReferenceIds(entry.item.relatedWorldviewIds),
             status: entry.item.status || 'planned',
             sortOrder: 0
           },
@@ -2340,6 +2352,9 @@ export const useAppStore = defineStore('app', () => {
         wordTarget: payload.wordTarget?.trim() || currentItem.wordTarget,
         conflict: payload.conflict?.trim() || currentItem.conflict,
         summary: payload.summary?.trim() || currentItem.summary,
+        relatedCharacterIds: normalizeOutlineReferenceIds(payload.relatedCharacterIds ?? currentItem.relatedCharacterIds),
+        relatedOrganizationIds: normalizeOutlineReferenceIds(payload.relatedOrganizationIds ?? currentItem.relatedOrganizationIds),
+        relatedWorldviewIds: normalizeOutlineReferenceIds(payload.relatedWorldviewIds ?? currentItem.relatedWorldviewIds),
         status: payload.status || currentItem.status
       }
 
