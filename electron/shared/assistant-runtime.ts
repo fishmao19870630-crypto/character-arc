@@ -289,6 +289,11 @@ export type AssistantIpcChannel =
 
 export interface TurnSendRequest {
   sessionId: string
+  /**
+   * 渲染进程在真实 turnId 创建前生成的请求 ID。
+   * 让用户可以在上下文规划阶段就取消本次请求。
+   */
+  clientRequestId?: string
   surface: SurfaceDefinition
   /** 本次发送时的实时上下文锚点。缺省时回落到 session.scopeRef。 */
   scopeRef?: string

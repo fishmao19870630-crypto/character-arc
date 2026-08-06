@@ -406,6 +406,7 @@ async function handleCommit(ids?: string[]): Promise<void> {
       <AssistantComposer
         v-model="composerValue"
         :is-streaming="assistant.isStreaming.value"
+        :is-canceling="assistant.isCanceling.value"
         :mode-label="currentMode.label"
         @send="sendWithMode"
         @cancel="assistant.cancel()"

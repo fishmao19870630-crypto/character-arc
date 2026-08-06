@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { NButton } from 'naive-ui'
+import { Square } from 'lucide-vue-next'
 
 const props = defineProps<{
   modelValue: string
   isStreaming: boolean
+  isCanceling?: boolean
   modeLabel?: string
   streamingCharCount?: number
 }>()
@@ -59,9 +61,13 @@ function handleKeydown(event: KeyboardEvent) {
           <NButton
             v-if="props.isStreaming"
             size="small"
+            type="error"
+            secondary
+            :disabled="props.isCanceling"
             @click="emit('cancel')"
           >
-            停止
+            <template #icon><Square :size="13" fill="currentColor" /></template>
+            {{ props.isCanceling ? '停止中' : '停止生成' }}
           </NButton>
           <NButton
             v-else

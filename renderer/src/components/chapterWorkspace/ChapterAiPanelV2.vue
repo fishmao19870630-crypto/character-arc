@@ -342,6 +342,7 @@ defineExpose({ sendPrompt, sendPromptWithAction, triggerDraft })
       <AssistantComposer
         v-model="composerValue"
         :is-streaming="assistant.isStreaming.value"
+        :is-canceling="assistant.isCanceling.value"
         :streaming-char-count="assistant.streamingCharCount.value"
         :mode-label="hasSelection ? selectionHint : currentMode.label"
         @send="sendWithMode"

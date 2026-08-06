@@ -62,12 +62,18 @@ function normalizeMarkdownTables(content: string): string {
   }).join('\n')
 }
 
-function renderMarkdown(content: string): string {
+const markdownCache = new Map<string, { content: string; html: string }>()
+
+function renderMarkdown(content: string, cacheKey: string): string {
+  const cached = markdownCache.get(cacheKey)
+  if (cached?.content === content) return cached.html
   const html = marked.parse(normalizeMarkdownTables(content || ''), { async: false }) as string
-  return DOMPurify.sanitize(html, {
+  const sanitized = DOMPurify.sanitize(html, {
     ALLOWED_TAGS: MD_ALLOWED_TAGS,
     ALLOWED_ATTR: MD_ALLOWED_ATTR
   })
+  markdownCache.set(cacheKey, { content, html: sanitized })
+  return sanitized
 }
 
 const props = defineProps<{
@@ -84,19 +90,54 @@ const emit = defineEmits<{
 }>()
 
 const scrollRef = ref<HTMLDivElement | null>(null)
+const shouldFollowOutput = ref(true)
+const BOTTOM_THRESHOLD_PX = 72
 
 watch(
-  () => props.messages.map((m) => [
-    m.assistantMessage,
-    m.reasoning.length,
-    m.flowBlocks.length,
-    m.toolCalls.map((t) => `${t.status}:${t.resultPreview?.length ?? 0}`).join(','),
-    m.status
-  ].join(':')).join('|'),
-  async () => {
-    await nextTick()
-    const el = scrollRef.value
-    if (el) el.scrollTop = el.scrollHeight
+  () => props.messages[0]?.turnId,
+  () => markdownCache.clear()
+)
+
+function isNearBottom(el: HTMLDivElement): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_THRESHOLD_PX
+}
+
+function handleScroll(): void {
+  const el = scrollRef.value
+  if (el) shouldFollowOutput.value = isNearBottom(el)
+}
+
+async function scrollToBottom(): Promise<void> {
+  await nextTick()
+  const el = scrollRef.value
+  if (el) el.scrollTop = el.scrollHeight
+}
+
+watch(
+  () => props.messages.length,
+  (length, previousLength) => {
+    if (length > previousLength) {
+      shouldFollowOutput.value = true
+      void scrollToBottom()
+    }
+  }
+)
+
+watch(
+  () => {
+    const message = props.messages[props.messages.length - 1]
+    if (!message) return 'empty'
+    return [
+      message.turnId,
+      message.assistantMessage.length,
+      message.reasoning.length,
+      message.flowBlocks.length,
+      message.toolCalls.map((tool) => `${tool.status}:${tool.resultPreview?.length ?? 0}`).join(','),
+      message.status
+    ].join(':')
+  },
+  () => {
+    if (shouldFollowOutput.value) void scrollToBottom()
   }
 )
 
@@ -212,7 +253,7 @@ const hasContent = computed(() => props.messages.length > 0)
 </script>
 
 <template>
-  <div ref="scrollRef" class="messages">
+  <div ref="scrollRef" class="messages arc-scrollbar" @scroll.passive="handleScroll">
     <!-- 骨架屏：初始加载中 -->
     <div v-if="props.isInitializing && !hasContent" class="skeleton">
       <div class="skeleton-item user">
@@ -270,7 +311,7 @@ const hasContent = computed(() => props.messages.length > 0)
               <span>分析过程</span>
               <em>{{ isActiveReasoningBlock(msg, block.id) ? '进行中' : '已完成' }}</em>
             </summary>
-            <div class="section-body assistant-copy reasoning-copy markdown-body" v-html="renderMarkdown(block.content)" />
+            <div class="section-body assistant-copy reasoning-copy markdown-body" v-html="renderMarkdown(block.content, `${msg.turnId}:${block.id}`)" />
           </details>
 
           <details
@@ -340,7 +381,7 @@ const hasContent = computed(() => props.messages.length > 0)
               <span>{{ msg.toolCalls.some((call) => /audit|check|review/i.test(call.toolName)) ? '审计结果' : '助手回复' }}</span>
             </header>
             <div class="section-body assistant-copy markdown-body">
-              <div v-html="renderMarkdown(block.content)" />
+              <div v-html="renderMarkdown(block.content, `${msg.turnId}:${block.id}`)" />
               <span v-if="msg.status === 'streaming' && block.id === msg.flowBlocks[msg.flowBlocks.length - 1]?.id" class="cursor">▍</span>
             </div>
           </section>
@@ -379,6 +420,9 @@ const hasContent = computed(() => props.messages.length > 0)
 .messages {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  overflow-anchor: none;
   padding: 24px 28px 18px;
   display: flex;
   flex-direction: column;

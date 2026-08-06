@@ -110,6 +110,28 @@ test('工具失败同时写入事件和 toolCalls 结果', async () => {
   assert.equal(conversation.statusUpdates[0].status, 'done')
 })
 
+test('连续文本增量合并后再落盘和推送', async () => {
+  const { loop, conversation, pushedEvents } = makeLoop(async (params) => {
+    params.handlers.onTextDelta('第一段')
+    params.handlers.onTextDelta('，第二段')
+    return {
+      finalText: '第一段，第二段',
+      toolCalls: [],
+      iterations: 1
+    }
+  })
+
+  const result = await loop.run(makeOptions(new AbortController().signal))
+
+  assert.equal(result.status, 'done')
+  assert.deepEqual(
+    pushedEvents.map((event) => event.event.kind),
+    ['chunk', 'done']
+  )
+  assert.equal(pushedEvents[0].event.delta, '第一段，第二段')
+  assert.equal(conversation.persistedEvents.length, 2)
+})
+
 test('运行被中止时发送 canceled 事件并更新 turn 状态', async () => {
   const controller = new AbortController()
   const { loop, conversation, pushedEvents } = makeLoop(async () => {
