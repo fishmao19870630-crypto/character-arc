@@ -7,6 +7,7 @@ import outlineItem from './outline-item'
 import outlineBatch from './outline-batch'
 import outlineChain from './outline-chain'
 import projectBootstrap from './project-bootstrap'
+import premiseEnhance from './premise-enhance'
 import chapterAnalysis from './chapter-analysis'
 import inspirationPack from './inspiration-pack'
 import assistantIntent from './assistant-intent'
@@ -57,6 +58,7 @@ register(outlineItem)
 register(outlineBatch)
 register(outlineChain)
 register(projectBootstrap)
+register(premiseEnhance)
 register(chapterAnalysis)
 register(inspirationPack)
 register(assistantIntent)

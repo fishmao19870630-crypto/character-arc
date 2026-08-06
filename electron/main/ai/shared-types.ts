@@ -73,6 +73,7 @@ export type AiTaskName =
   | 'chapter-humanize'
   | 'plot-thread-detect'
   | 'project-bootstrap'
+  | 'premise-enhance'
   | 'spiral-seed'
   | 'spiral-expand'
   | 'spiral-validate'
@@ -333,6 +334,11 @@ export type ProjectBootstrapResult = {
   outlineItems: OutlineResult[]
 }
 
+/** 小说创建向导中的简介优化结果 */
+export type PremiseEnhanceResult = {
+  premise: string
+}
+
 /**
  * 创作记忆集合生成结果。
  * 每个 key 对应一种创作记忆（任务计划、发现、进度等）。
@@ -519,6 +525,7 @@ export type AiTaskResult =
   | AssistantIntentResult
   | AssistantActionProposalResult
   | ProjectBootstrapResult
+  | PremiseEnhanceResult
   | WorkflowDocumentsResult
   | WorkflowStageDocumentsResult
   | ChapterAnalysisResult

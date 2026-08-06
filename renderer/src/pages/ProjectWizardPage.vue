@@ -27,6 +27,7 @@ const message = useMessage()
 const step = ref(1)
 const isGenerating = ref(false)
 const isCancelling = ref(false)
+const isPremiseOptimizing = ref(false)
 
 type GenerationMode = 'off' | 'quick' | 'deep'
 
@@ -97,7 +98,7 @@ const canContinue = computed(() => {
     return formData.title.trim().length > 0 && resolvedGenre.value.length > 0
   }
   if (step.value === 2) {
-    return formData.premise.trim().length > 0
+    return formData.premise.trim().length > 0 && !isPremiseOptimizing.value
   }
   return !isGenerating.value
 })
@@ -106,6 +107,7 @@ function resetWizard(): void {
   step.value = 1
   isGenerating.value = false
   isCancelling.value = false
+  isPremiseOptimizing.value = false
   spiralPhase.value = 'idle'
   spiralPhaseStatus.value = 'idle'
   formData.title = ''
@@ -145,6 +147,52 @@ function activateStep(targetStep: number): void {
 
   if (targetStep < step.value) {
     step.value = targetStep
+  }
+}
+
+async function optimizePremise(): Promise<void> {
+  const sourcePremise = formData.premise.trim()
+  if (!sourcePremise) {
+    message.warning('请先填写小说简介')
+    return
+  }
+  if (isPremiseOptimizing.value) return
+
+  isPremiseOptimizing.value = true
+  try {
+    const result = await window.characterArc.generateAi(
+      toIpcPayload({
+        task: 'premise-enhance',
+        settings: appStore.appSettings,
+        context: {
+          projectTitle: formData.title.trim(),
+          projectGenre: resolvedGenre.value,
+          projectNovelLengthLabel: novelLengthLabel.value,
+          premise: sourcePremise
+        }
+      })
+    )
+
+    if (!result.success || !result.result) {
+      throw new Error(result.error ?? 'AI 优化简介失败，请检查模型配置')
+    }
+
+    const optimizedPremise = (result.result as { premise?: unknown }).premise
+    if (typeof optimizedPremise !== 'string' || !optimizedPremise.trim()) {
+      throw new Error('AI 未返回有效的小说简介')
+    }
+
+    if (formData.premise.trim() !== sourcePremise) {
+      message.info('简介内容已发生修改，本次 AI 结果未覆盖当前内容')
+      return
+    }
+
+    formData.premise = optimizedPremise.trim()
+    message.success('小说简介已优化')
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : 'AI 优化简介失败，请稍后重试')
+  } finally {
+    isPremiseOptimizing.value = false
   }
 }
 
@@ -388,15 +436,31 @@ async function goNext(): Promise<void> {
                     <span>小说简介</span>
                     <Info :size="14" />
                   </label>
-                  <n-input
-                    v-model:value="formData.premise"
-                    type="textarea"
-                    placeholder="描述这个故事的主角、核心冲突、目标或最吸引人的设定。例如：一个能看见未来死亡片段的实习法医，被迫和自己即将解剖的尸体合作，追查一场还没发生的连环谋杀。"
-                    :autosize="{ minRows: 10, maxRows: 16 }"
-                    :maxlength="800"
-                    show-count
-                    class="wizard-naive-textarea"
-                  />
+                  <div class="premise-input-shell">
+                    <n-input
+                      v-model:value="formData.premise"
+                      type="textarea"
+                      placeholder="描述这个故事的主角、核心冲突、目标或最吸引人的设定。例如：一个能看见未来死亡片段的实习法医，被迫和自己即将解剖的尸体合作，追查一场还没发生的连环谋杀。"
+                      :autosize="{ minRows: 10, maxRows: 16 }"
+                      :maxlength="800"
+                      show-count
+                      class="wizard-naive-textarea"
+                    />
+                    <n-button
+                      class="premise-ai-button"
+                      type="primary"
+                      secondary
+                      size="small"
+                      :loading="isPremiseOptimizing"
+                      :disabled="!formData.premise.trim() || isPremiseOptimizing"
+                      @click="optimizePremise"
+                    >
+                      <template #icon>
+                        <Sparkles :size="15" />
+                      </template>
+                      {{ isPremiseOptimizing ? '正在优化' : 'AI 优化简介' }}
+                    </n-button>
+                  </div>
                   <p class="field-hint">AI 会优先根据题材、长短篇和这段简介来生成开局世界观与前三章大纲。</p>
                 </div>
 
@@ -883,9 +947,26 @@ async function goNext(): Promise<void> {
 }
 
 .wizard-naive-textarea :deep(.n-input__textarea-el) {
-  padding: 4px 4px 4px 0;
+  padding: 4px 4px 48px 0;
   font-size: 15px;
   line-height: 1.75;
+}
+
+.premise-input-shell {
+  position: relative;
+}
+
+.premise-input-shell :deep(.n-input-word-count) {
+  right: 148px;
+  bottom: 13px;
+}
+
+.premise-ai-button {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  z-index: 2;
+  min-width: 126px;
 }
 
 .genre-stack {
@@ -1520,6 +1601,14 @@ async function goNext(): Promise<void> {
 
   .section-head {
     margin-bottom: 10px;
+  }
+
+  .premise-input-shell :deep(.n-input-word-count) {
+    right: 136px;
+  }
+
+  .premise-ai-button {
+    min-width: 116px;
   }
 }
 
