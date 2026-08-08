@@ -128,6 +128,8 @@ export type WorkspacePayload = {
   selectedProjectId: string
   knowledgeDocuments: WorkspaceKnowledgeDocument[]
   referenceWorks: WorkspaceReferenceWork[]
+  /** 应用级 AI 调用历史；projectId 为空时表示不关联具体项目。 */
+  aiRuns: WorkspaceAiRunRecord[]
   projects: Array<{
     id: string
     title: string
@@ -356,7 +358,8 @@ export type WorkspacePayload = {
   }>
 }
 
-export type LegacyWorkspacePayload = Omit<WorkspacePayload, 'workspaces'> & {
+export type LegacyWorkspacePayload = Omit<WorkspacePayload, 'workspaces' | 'aiRuns'> & {
+  aiRuns?: WorkspaceAiRunRecord[]
   worldviewEntries?: Array<{
     id: string
     type: string
@@ -610,8 +613,24 @@ export function normalizeCoverWorkbenchHistory(
 
 export function normalizeWorkspacePayload(payload: WorkspacePayload | LegacyWorkspacePayload): WorkspacePayload {
   if ('workspaces' in payload && payload.workspaces) {
+    const workspaceAiRuns = Object.entries(payload.workspaces).flatMap(([projectId, workspace]) =>
+      (workspace.aiRuns ?? []).map((run) => ({ ...run, projectId }))
+    )
+    const payloadAiRuns = Array.isArray((payload as WorkspacePayload).aiRuns)
+      ? (payload as WorkspacePayload).aiRuns
+      : []
+    const globalAiRuns = Array.from(
+      new Map([...workspaceAiRuns, ...payloadAiRuns].map((run) => [run.id, run])).values()
+    )
     return {
       ...payload,
+      aiRuns: globalAiRuns,
+      workspaces: Object.fromEntries(
+        Object.entries(payload.workspaces).map(([projectId, workspace]) => [
+          projectId,
+          { ...workspace, aiRuns: [] }
+        ])
+      ),
       projects: payload.projects.map((project) => normalizeProjectRecord(project)),
       knowledgeDocuments: Array.isArray((payload as WorkspacePayload).knowledgeDocuments)
         ? (payload as WorkspacePayload).knowledgeDocuments
@@ -721,6 +740,12 @@ export function normalizeWorkspacePayload(payload: WorkspacePayload | LegacyWork
     selectedProjectId,
     knowledgeDocuments: [],
     referenceWorks: [],
+    aiRuns: Array.isArray(legacyPayload.aiRuns)
+      ? legacyPayload.aiRuns.map((run) => ({
+          ...run,
+          projectId: run.projectId || selectedProjectId
+        }))
+      : [],
     projects,
     workspaces,
     appSettings: normalizeAppSettings(legacyPayload.appSettings),

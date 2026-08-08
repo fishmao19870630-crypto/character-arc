@@ -659,7 +659,7 @@ export interface AiRunUsage {
 export interface AiRunRecord {
   /** 运行记录唯一标识 */
   id: string
-  /** 所属项目 ID */
+  /** 可选关联项目 ID；空字符串表示全局调用，不影响日志记录与生命周期 */
   projectId: string
   /** 关联章节 ID */
   chapterId?: string

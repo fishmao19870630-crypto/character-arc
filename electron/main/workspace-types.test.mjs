@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { mergeAppSettingsIntoWorkspaceSnapshot } from './workspace-types.ts'
+import { mergeAppSettingsIntoWorkspaceSnapshot, normalizeWorkspacePayload } from './workspace-types.ts'
 
 test('保存 AI 设置时刷新内存快照并保留未落盘的工作区数据', () => {
   const workspaceMarker = { unsaved: true }
@@ -98,4 +98,44 @@ test('旧 AI 设置和配置档案缺少协议时迁移为 auto', () => {
 
   assert.equal(merged.appSettings.apiProtocol, 'auto')
   assert.equal(merged.appSettings.aiProfiles[0].apiProtocol, 'auto')
+})
+
+test('全局 AI 日志会合并旧项目级记录并按 ID 去重', () => {
+  const legacyRun = {
+    id: 'run-legacy',
+    chapterId: '',
+    task: 'chapter-first-draft',
+    provider: 'deepseek',
+    model: 'deepseek-chat',
+    status: 'success',
+    startedAt: '2026-08-01T00:00:00.000Z',
+    usedKnowledge: [],
+    repairTriggered: false,
+    error: '',
+    responsePreview: '旧记录'
+  }
+  const globalRun = {
+    ...legacyRun,
+    projectId: 'project-1',
+    responsePreview: '全局记录'
+  }
+
+  const normalized = normalizeWorkspacePayload({
+    theme: 'ocean',
+    selectedProjectId: 'project-1',
+    projects: [],
+    workspaces: {
+      'project-1': { aiRuns: [legacyRun] }
+    },
+    knowledgeDocuments: [],
+    referenceWorks: [],
+    aiRuns: [globalRun],
+    coverWorkbenchHistory: [],
+    appSettings: {}
+  })
+
+  assert.equal(normalized.aiRuns.length, 1)
+  assert.equal(normalized.aiRuns[0].projectId, 'project-1')
+  assert.equal(normalized.aiRuns[0].responsePreview, '全局记录')
+  assert.deepEqual(normalized.workspaces['project-1'].aiRuns, [])
 })

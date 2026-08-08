@@ -62,7 +62,8 @@ const projectTitleById = computed(() => {
   return map
 })
 function projectTitleFor(run: AiRunRecord): string {
-  return projectTitleById.value.get(run.projectId) || '未知项目'
+  if (!run.projectId) return ''
+  return projectTitleById.value.get(run.projectId) || '待创建或已删除项目'
 }
 
 const statusMeta: Record<AiRunRecord['status'], { label: string; type: 'default' | 'info' | 'success' | 'error' | 'warning' }> = {
@@ -104,10 +105,11 @@ const taskLabelMap: Record<string, string> = {
   'style-fingerprint-extract': '风格指纹提取',
   'workflow-documents': '设定导出',
   'plot-thread-detect': '伏笔检测',
+  'premise-enhance': '小说简介优化',
   'project-bootstrap': '项目初始化',
-  'spiral-seed': '旋种生成',
-  'spiral-expand': '旋种扩写',
-  'spiral-validate': '旋种验证',
+  'spiral-seed': '项目核心设计',
+  'spiral-expand': '角色关系与大纲扩展',
+  'spiral-validate': '项目一致性校验',
   'inspiration-pack': '灵感整理',
   'cover-generate': '封面生成'
 }
@@ -266,7 +268,7 @@ function loadMoreAiRunLogs(): void {
   >
     <div class="ai-log-modal__summary">
       <strong>AI 调用日志</strong>
-      <span>全部项目 · {{ aiRunLogs.length }} 条记录</span>
+      <span>全部调用 · {{ aiRunLogs.length }} 条记录</span>
     </div>
 
     <div v-if="!aiRunLogs.length" class="ai-log-empty">
@@ -294,7 +296,7 @@ function loadMoreAiRunLogs(): void {
         </div>
 
         <div class="ai-log-card__meta">
-          <span>项目：{{ item.projectTitle }}</span>
+          <span v-if="item.projectTitle">关联项目：{{ item.projectTitle }}</span>
           <span>开始：{{ item.startedAt }}</span>
           <span>耗时：{{ item.duration }}</span>
           <span>{{ item.tokenUsage }}</span>

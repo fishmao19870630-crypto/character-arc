@@ -84,12 +84,17 @@ function updateLatestAppSettings(
 }
 
 function appendAiRunToLatestSnapshot(payload: WorkspaceAiRunEventPayload): void {
-  if (!latestWorkspaceSnapshot?.workspaces?.[payload.projectId]) {
+  if (!latestWorkspaceSnapshot) {
     return
   }
 
-  const workspace = latestWorkspaceSnapshot.workspaces[payload.projectId]
-  workspace.aiRuns = [...(workspace.aiRuns ?? []), payload.meta].slice(-200)
+  latestWorkspaceSnapshot.aiRuns = [
+    ...(latestWorkspaceSnapshot.aiRuns ?? []),
+    {
+      ...payload.meta,
+      projectId: payload.projectId || ''
+    }
+  ].slice(-200)
 }
 
 function emitAiRunEvent(payload: WorkspaceAiRunEventPayload): void {

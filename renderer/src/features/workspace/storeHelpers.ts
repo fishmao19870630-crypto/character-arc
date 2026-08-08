@@ -42,6 +42,7 @@ export interface StoredState {
   workspaces: Record<string, ProjectWorkspaceData>
   knowledgeDocuments: KnowledgeDocument[]
   referenceWorks: ReferenceWorkItem[]
+  aiRuns: AiRunRecord[]
   appSettings: AppSettings
   coverWorkbenchHistory: import('@/types/app').CoverWorkbenchHistoryItem[]
 }
@@ -275,7 +276,7 @@ function normalizeKnowledgeDocuments(documents?: KnowledgeDocument[] | null): Kn
     : []
 }
 
-function normalizeAiRuns(aiRuns?: AiRunRecord[] | null): AiRunRecord[] {
+export function normalizeAiRuns(aiRuns?: AiRunRecord[] | null): AiRunRecord[] {
   return Array.isArray(aiRuns)
     ? aiRuns.map((run) => ({
         ...run,
@@ -419,6 +420,7 @@ export function loadStoredState(): StoredState {
     workspaces: {},
     knowledgeDocuments: [],
     referenceWorks: [],
+    aiRuns: [],
     appSettings: defaultAppSettings,
     coverWorkbenchHistory: []
   }

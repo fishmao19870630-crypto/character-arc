@@ -30,6 +30,7 @@ import {
   buildWorkspaceMapFromLegacy,
   defaultProjects,
   loadStoredState,
+  normalizeAiRuns,
   normalizeAppSettings,
   normalizeChapterAssistantTemplates,
   normalizeProjectSummary,
@@ -218,6 +219,8 @@ export const useAppStore = defineStore('app', () => {
   const projects = ref<ProjectSummary[]>(stored.projects)
   /** 项目 ID → 工作区数据 的映射表 */
   const projectWorkspaces = ref<Record<string, ProjectWorkspaceData>>(stored.workspaces)
+  /** 应用级 AI 调用历史；projectId 仅作为可选关联信息。 */
+  const globalAiRuns = ref<AiRunRecord[]>(normalizeAiRuns(stored.aiRuns))
   /** 应用全局设置（AI 供应商、模型、自动保存等） */
   const appSettings = ref<AppSettings>(stored.appSettings)
   const coverWorkbenchHistory = ref<import('@/types/app').CoverWorkbenchHistoryItem[]>(stored.coverWorkbenchHistory ?? [])
@@ -310,21 +313,14 @@ export const useAppStore = defineStore('app', () => {
   )
   /** 全局拆书库参考作品（跨项目共享） */
   const referenceWorks = ref<ReferenceWorkItem[]>(stored.referenceWorks ?? [])
-  /** 当前项目的 AI 运行记录列表 */
-  const aiRuns = computed(() => currentWorkspace.value.aiRuns)
+  /** 当前项目关联的 AI 运行记录列表 */
+  const aiRuns = computed(() => globalAiRuns.value.filter((run) => run.projectId === selectedProjectId.value))
   /**
-   * 跨项目聚合的全部 AI 运行记录，按开始时间降序。
-   * AI 调用日志面板用它展示所有项目（含单次任务）的历史，而非仅当前项目。
+   * 应用级全部 AI 运行记录，按开始时间降序；不要求记录属于某个项目。
    */
-  const allAiRuns = computed(() => {
-    const runs: AiRunRecord[] = []
-    for (const [projectId, workspace] of Object.entries(projectWorkspaces.value)) {
-      if (Array.isArray(workspace.aiRuns)) {
-        runs.push(...workspace.aiRuns.map(run => ({ ...run, projectId: run.projectId || projectId })))
-      }
-    }
-    return runs.sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''))
-  })
+  const allAiRuns = computed(() =>
+    [...globalAiRuns.value].sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''))
+  )
   /**
    * 全局 AI 任务注册表（按 key 去重，响应式）。
    *
@@ -386,12 +382,9 @@ export const useAppStore = defineStore('app', () => {
       return
     }
 
-    // 项目级 AI 历史：单次任务（如角色生成、大纲扩写）的 context 常不带 projectId，
-    // 导致 meta.projectId 为空。这里用当前选中项目兜底，确保所有任务都能落进日志。
-    const runProjectId = payload.projectId || selectedProjectId.value
-    if (runProjectId) {
-      appendAiRun(runProjectId, payload.meta)
-    }
+    // AI 历史是应用级数据；projectId 为空也必须记录，不能回退并误绑当前项目。
+    const runProjectId = payload.projectId || ''
+    appendAiRun(runProjectId, payload.meta)
 
     // agent loop 通过 knowledge_save_document 工具落库的文档：随 ai-run-event 一起回灌
     const produced = (payload.meta as { producedKnowledgeDocuments?: Array<Partial<KnowledgeDocument>> }).producedKnowledgeDocuments
@@ -617,6 +610,21 @@ export const useAppStore = defineStore('app', () => {
     referenceWorks.value = Array.isArray((payload as Partial<StoredState>).referenceWorks)
       ? (payload as Partial<StoredState>).referenceWorks!
       : []
+    const workspaceAiRuns = Object.entries(projectWorkspaces.value).flatMap(([projectId, workspace]) =>
+      (workspace.aiRuns ?? []).map((run) => ({ ...run, projectId: run.projectId || projectId }))
+    )
+    const payloadAiRuns = Array.isArray((payload as Partial<StoredState>).aiRuns)
+      ? (payload as Partial<StoredState>).aiRuns!
+      : []
+    globalAiRuns.value = normalizeAiRuns(
+      Array.from(new Map([...workspaceAiRuns, ...payloadAiRuns].map((run) => [run.id, run])).values())
+    )
+    projectWorkspaces.value = Object.fromEntries(
+      Object.entries(projectWorkspaces.value).map(([projectId, workspace]) => [
+        projectId,
+        { ...workspace, aiRuns: [] }
+      ])
+    )
     syncSelectedChapter()
   }
 
@@ -629,6 +637,7 @@ export const useAppStore = defineStore('app', () => {
       workspaces: toSerializable(projectWorkspaces.value),
       knowledgeDocuments: toSerializable(allKnowledgeDocuments.value),
       referenceWorks: toSerializable(referenceWorks.value),
+      aiRuns: toSerializable(globalAiRuns.value),
       appSettings: toSerializable(appSettings.value),
       coverWorkbenchHistory: toSerializable(coverWorkbenchHistory.value)
     }
@@ -1047,7 +1056,6 @@ export const useAppStore = defineStore('app', () => {
   /** 从向导创建完整项目工作区：分配 ID、设置默认分卷和章节、切换到工作台 */
   function createProjectWorkspace(payload: ProjectWorkspacePayload, requestedProjectId?: string): string {
     const projectId = requestedProjectId?.trim() || uniqueId('project')
-    const pendingWorkspace = projectWorkspaces.value[projectId]
     const nextVolumes = payload.outlineVolumes?.length ? payload.outlineVolumes : [createWorkspaceVolume()]
     const nextChapters = payload.chapters?.length ? payload.chapters : [buildStarterChapter(nextVolumes[0].id)]
     const computedWordCount = formatProjectWordCount(nextChapters)
@@ -1085,9 +1093,7 @@ export const useAppStore = defineStore('app', () => {
         chapters: nextChapters,
         chapterVersions: payload.chapterVersions,
         plotThreads: payload.plotThreads,
-        messages: payload.messages,
-        // AI 生成在项目正式切换前已经开始时，保留预留 ID 下收到的运行记录。
-        aiRuns: pendingWorkspace?.aiRuns
+        messages: payload.messages
       })
     }
     selectedProjectId.value = projectId
@@ -1308,28 +1314,22 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function appendAiRun(projectId: string, record: Omit<AiRunRecord, 'projectId'>): void {
-    if (!projectId.trim()) {
-      return
-    }
-
-    updateProjectWorkspace(projectId, (workspace) => ({
-      ...workspace,
-      aiRuns: [
-        ...(workspace.aiRuns ?? []),
-        {
-          ...record,
-          projectId,
-          usage: record.usage && typeof record.usage === 'object'
-            ? {
+    globalAiRuns.value = [
+      ...globalAiRuns.value,
+      {
+        ...record,
+        projectId: projectId.trim(),
+        usage: record.usage && typeof record.usage === 'object'
+          ? {
                 promptTokens: Number.isFinite(record.usage.promptTokens) ? Math.max(0, Number(record.usage.promptTokens)) : undefined,
                 completionTokens: Number.isFinite(record.usage.completionTokens) ? Math.max(0, Number(record.usage.completionTokens)) : undefined,
                 totalTokens: Number.isFinite(record.usage.totalTokens) ? Math.max(0, Number(record.usage.totalTokens)) : undefined,
                 reasoningTokens: Number.isFinite(record.usage.reasoningTokens) ? Math.max(0, Number(record.usage.reasoningTokens)) : undefined,
                 cachedInputTokens: Number.isFinite(record.usage.cachedInputTokens) ? Math.max(0, Number(record.usage.cachedInputTokens)) : undefined
-              }
-            : undefined,
-          usedKnowledge: Array.isArray(record.usedKnowledge)
-            ? record.usedKnowledge.map((item) => {
+            }
+          : undefined,
+        usedKnowledge: Array.isArray(record.usedKnowledge)
+          ? record.usedKnowledge.map((item) => {
                 const sourceType: AiRunRecord['usedKnowledge'][number]['sourceType'] =
                   item.sourceType === 'reference-summary'
                   || item.sourceType === 'workflow-document'
@@ -1348,20 +1348,19 @@ export const useAppStore = defineStore('app', () => {
                     ? item.keywords.map((keyword) => String(keyword).trim()).filter(Boolean).slice(0, 8)
                     : []
                 }
-              })
-            : [],
-          toolCalls: Array.isArray(record.toolCalls)
-            ? record.toolCalls.map((item) => ({
+            })
+          : [],
+        toolCalls: Array.isArray(record.toolCalls)
+          ? record.toolCalls.map((item) => ({
                 tool: String(item.tool ?? '').trim(),
                 args: item.args && typeof item.args === 'object' ? item.args as Record<string, unknown> : {},
                 durationMs: Number.isFinite(item.durationMs) ? Math.max(0, Number(item.durationMs)) : 0,
                 status: (item.status === 'error' ? 'error' : 'ok') as 'ok' | 'error',
                 error: String(item.error ?? '').trim() || undefined
-              }))
-            : undefined
-        }
-      ].slice(-200)
-    }))
+            }))
+          : undefined
+      }
+    ].slice(-200)
     schedulePersist('fast')
   }
 

@@ -198,9 +198,7 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
                 controller.signal,
                 knowledgeContext
               )
-              if (result.meta.projectId) {
-                deps!.emitAiRunEvent({ projectId: result.meta.projectId, meta: { id: randomUUID(), ...result.meta } })
-              }
+              deps!.emitAiRunEvent({ projectId: result.meta.projectId ?? '', meta: { id: randomUUID(), ...result.meta } })
               if (!event.sender.isDestroyed()) {
                 event.sender.send('characterarc:ai-stream-event', {
                   streamId,
@@ -234,9 +232,7 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
             controller.signal,
             knowledgeContext
           )
-          if (result.meta.projectId) {
-            deps!.emitAiRunEvent({ projectId: result.meta.projectId, meta: { id: randomUUID(), ...result.meta } })
-          }
+          deps!.emitAiRunEvent({ projectId: result.meta.projectId ?? '', meta: { id: randomUUID(), ...result.meta } })
           if (!event.sender.isDestroyed()) {
             event.sender.send('characterarc:ai-stream-event', {
               streamId,
@@ -248,8 +244,8 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
         } catch (error) {
           const aiRunMeta = error && typeof error === 'object' && 'aiRunMeta' in error
             ? (error as { aiRunMeta?: Record<string, unknown> }).aiRunMeta : undefined
-          if (aiRunMeta && (aiRunMeta as { projectId?: string }).projectId) {
-            deps!.emitAiRunEvent({ projectId: String((aiRunMeta as { projectId?: string }).projectId), meta: { id: randomUUID(), ...aiRunMeta } })
+          if (aiRunMeta) {
+            deps!.emitAiRunEvent({ projectId: String((aiRunMeta as { projectId?: string }).projectId ?? ''), meta: { id: randomUUID(), ...aiRunMeta } })
           }
           if (!event.sender.isDestroyed()) {
             event.sender.send('characterarc:ai-stream-event', controller.signal.aborted
@@ -337,9 +333,7 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
               controller.signal,
               knowledgeContext
             )
-            if (result.meta.projectId) {
-              deps!.emitAiRunEvent({ projectId: result.meta.projectId, meta: { id: randomUUID(), ...result.meta } })
-            }
+            deps!.emitAiRunEvent({ projectId: result.meta.projectId ?? '', meta: { id: randomUUID(), ...result.meta } })
             if (!event.sender.isDestroyed()) {
               event.sender.send('characterarc:ai-stream-event', { streamId, type: 'done', content: streamedContent, result: result.result })
             }
@@ -367,9 +361,7 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
             controller.signal,
             knowledgeContext
           )
-          if (result.meta.projectId) {
-            deps!.emitAiRunEvent({ projectId: result.meta.projectId, meta: { id: randomUUID(), ...result.meta } })
-          }
+          deps!.emitAiRunEvent({ projectId: result.meta.projectId ?? '', meta: { id: randomUUID(), ...result.meta } })
           if (!event.sender.isDestroyed()) {
             event.sender.send('characterarc:ai-stream-event', {
               streamId,
@@ -449,29 +441,25 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
       }
       const result = await generateImage(settings, prompt)
 
-      if (projectId) {
-        const meta = buildRunMeta(
-          'cover-generate', projectId, undefined, metaSettings, 'success',
-          startedAt, new Date().toISOString(),
-          result.usage,
-          [], [],
-          false, result.revisedPrompt ?? '封面图片已生成', ''
-        )
-        deps!.emitAiRunEvent({ projectId, meta: { id: randomUUID(), ...meta } })
-      }
+      const meta = buildRunMeta(
+        'cover-generate', projectId ?? '', undefined, metaSettings, 'success',
+        startedAt, new Date().toISOString(),
+        result.usage,
+        [], [],
+        false, result.revisedPrompt ?? '封面图片已生成', ''
+      )
+      deps!.emitAiRunEvent({ projectId: projectId ?? '', meta: { id: randomUUID(), ...meta } })
       return { success: true, result }
     } catch (error) {
       const message = formatAiErrorMessage(error, '图片生成失败')
-      if (projectId) {
-        const meta = buildRunMeta(
-          'cover-generate', projectId, undefined, metaSettings, 'error',
-          startedAt, new Date().toISOString(),
-          undefined,
-          [], [],
-          false, '', message
-        )
-        deps!.emitAiRunEvent({ projectId, meta: { id: randomUUID(), ...meta } })
-      }
+      const meta = buildRunMeta(
+        'cover-generate', projectId ?? '', undefined, metaSettings, 'error',
+        startedAt, new Date().toISOString(),
+        undefined,
+        [], [],
+        false, '', message
+      )
+      deps!.emitAiRunEvent({ projectId: projectId ?? '', meta: { id: randomUUID(), ...meta } })
       return { success: false, error: message }
     }
   })
