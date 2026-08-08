@@ -423,8 +423,7 @@ export async function testAiConnection(rawSettings: AppSettings): Promise<{
   await generateText({
     model: createModel(settings),
     system: buildSystemPrompt(settings, probePrompt.system),
-    prompt: probePrompt.user,
-    maxOutputTokens: 4096
+    prompt: probePrompt.user
   })
   return {
     provider: settings.provider,
@@ -778,7 +777,7 @@ ${chapterContent}
   }
 
   try {
-    const generation = await aiGenerateTextWithUsage(settings, prompt, 1500, signal, { disableReasoning: true })
+    const generation = await aiGenerateTextWithUsage(settings, prompt, undefined, signal, { disableReasoning: true })
     const raw = generation.text
     const parsed = extractJsonObject(raw)
     const delta = normalizeStateDelta(parsed)

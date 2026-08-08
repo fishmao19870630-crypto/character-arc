@@ -156,7 +156,6 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
     system: buildSystemPrompt(params.settings, params.systemPrompt),
     prompt: params.userPrompt,
     ...(params.disableTools ? {} : { tools: sdkTools, stopWhen: stepCountIs(maxSteps) }),
-    maxOutputTokens: params.maxTokens,
     abortSignal: params.ctx.signal,
     onError: ({ error }) => captureError(error),
     experimental_onToolCallStart: onToolCallStart,
@@ -263,8 +262,8 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
     const reasoningTokens = usage.reasoningTokens ?? 0
     throw new Error(
       reasoningTokens > 0
-        ? `模型输出被截断：${reasoningTokens} 个推理 token 已耗尽输出预算，未产生可见回复。请在设置中提高输出上限，或改用非推理模型。`
-        : '模型输出被截断（finish_reason=length），未产生可见回复。请提高输出上限后重试。'
+        ? `模型服务端截断了输出：${reasoningTokens} 个推理 token 已耗尽输出预算，未产生可见回复。请改用非推理模型或输出能力更强的模型。`
+        : '模型服务端截断了输出（finish_reason=length），未产生可见回复。请改用输出能力更强的模型后重试。'
     )
   }
 
@@ -328,7 +327,6 @@ async function synthesizeFinalAnswer(
       observationText,
       '请不要调用任何工具，直接给出完整的最终答案，并严格满足任务要求的输出格式。'
     ].join('\n\n'),
-    maxOutputTokens: params.maxTokens,
     abortSignal: params.ctx.signal
   })
 

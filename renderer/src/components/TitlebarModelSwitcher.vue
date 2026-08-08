@@ -42,7 +42,7 @@ const visibleAiRunLogs = computed(() =>
     const readStats = toolReadStats(run)
     return {
       run,
-      taskLabel: formatTaskLabel(run.task),
+      taskLabel: formatTaskLabel(run.task, run.clientKey),
       projectTitle: projectTitleFor(run),
       chapterTitle: chapterTitleFor(run),
       startedAt: formatTime(run.startedAt),
@@ -111,6 +111,13 @@ const taskLabelMap: Record<string, string> = {
   'spiral-expand': '角色关系与大纲扩展',
   'spiral-validate': '项目一致性校验',
   'inspiration-pack': '灵感整理',
+  'catalog-batch': '图鉴批量生成',
+  'catalog-batch:character': '角色批量生成',
+  'catalog-batch:organization': '组织批量生成',
+  'catalog-batch:relationship': '人物关系批量生成',
+  'catalog-batch:membership': '组织成员批量生成',
+  'catalog-batch:worldview': '世界观批量生成',
+  'catalog-batch:inspiration': '灵感批量生成',
   'cover-generate': '封面生成'
 }
 
@@ -129,8 +136,8 @@ async function handleFetchModels(): Promise<void> {
   }
 }
 
-function formatTaskLabel(task: string): string {
-  return taskLabelMap[task] || task
+function formatTaskLabel(task: string, clientKey?: string): string {
+  return (clientKey && taskLabelMap[clientKey]) || taskLabelMap[task] || task
 }
 
 function formatTime(value?: string): string {
