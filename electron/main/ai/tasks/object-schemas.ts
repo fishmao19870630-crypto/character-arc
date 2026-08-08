@@ -281,6 +281,7 @@ const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
   'spiral-seed': z.object({
     protagonist: z.object({
       name: stringField,
+      tags: stringList,
       coreDesire: stringField,
       coreFlaw: stringField,
       innerConflict: stringField
@@ -296,15 +297,37 @@ const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
     supportingCharacters: z.array(z.object({
       name: stringField,
       role: stringField,
+      tags: stringList,
       relationToProtagonist: stringField,
       motivation: stringField
+    })),
+    organizations: z.array(z.object({
+      name: stringField,
+      type: stringField,
+      description: stringField,
+      motto: stringField,
+      members: z.array(z.object({
+        characterName: stringField,
+        role: stringField,
+        notes: stringField
+      }))
+    })),
+    relationships: z.array(z.object({
+      fromCharacter: stringField,
+      toCharacter: stringField,
+      type: stringField,
+      description: stringField,
+      intensity: z.number().min(0).max(100)
     })),
     outlineBeats: z.array(z.object({
       title: stringField,
       conflict: stringField,
       characterDriven: stringField,
       summary: stringField,
-      wordTarget: stringField
+      wordTarget: stringField,
+      relatedCharacters: stringList,
+      relatedOrganizations: stringList,
+      relatedWorldview: stringList
     })),
     expandedWorldview: z.array(worldviewEntrySchema)
   }),

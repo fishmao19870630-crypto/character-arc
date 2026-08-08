@@ -26,6 +26,8 @@ const handler: TaskHandler = {
 
     const expandBlock = expandResult
       ? `配角：${expandResult.supportingCharacters.map((c) => `${c.name}（${c.role}）- 动机：${c.motivation}`).join('\n')}
+组织：${expandResult.organizations.map((organization) => `${organization.name}（${organization.type}）- ${organization.description}`).join('\n')}
+人物关系：${expandResult.relationships.map((relationship) => `${relationship.fromCharacter} → ${relationship.toCharacter}（${relationship.type}）：${relationship.description}`).join('\n')}
 大纲节拍：${expandResult.outlineBeats.map((b, i) => `${i + 1}. ${b.title} - 冲突：${b.conflict} - 驱动：${b.characterDriven}`).join('\n')}
 补充设定：${expandResult.expandedWorldview.map((r) => `${r.title}：${r.content}`).join('\n')}`
       : '（无）'

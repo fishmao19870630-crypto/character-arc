@@ -2,9 +2,12 @@ import type {
   ChapterAssistantPromptTemplate,
   ChapterDraft,
   CharacterCard,
+  CharacterRelationship,
   NovelLength,
   OutlineItem,
   OutlineVolume,
+  OrganizationEntry,
+  OrganizationMembership,
   WorldviewEntry
 } from '@/types/app'
 import { createOutlineVolume } from '@/features/workspace/outlineVolumes'
@@ -33,13 +36,15 @@ export interface ProjectBootstrapResult {
 
 export interface SpiralBootstrapResult {
   seed: {
-    protagonist: { name: string; coreDesire: string; coreFlaw: string; innerConflict: string }
+    protagonist: { name: string; tags?: string[]; coreDesire: string; coreFlaw: string; innerConflict: string }
     mainArc: { premise: string; centralQuestion: string; endingDirection: string }
     worldRules: Array<{ type: string; title: string; content: string }>
   }
   expand: {
-    supportingCharacters: Array<{ name: string; role: string; relationToProtagonist: string; motivation: string }>
-    outlineBeats: Array<{ title: string; conflict: string; characterDriven: string; summary: string; wordTarget: string }>
+    supportingCharacters: Array<{ name: string; role: string; tags?: string[]; relationToProtagonist: string; motivation: string }>
+    organizations: Array<{ name: string; type: string; description: string; motto: string; members: Array<{ characterName: string; role: string; notes: string }> }>
+    relationships: Array<{ fromCharacter: string; toCharacter: string; type: string; description: string; intensity: number }>
+    outlineBeats: Array<{ title: string; conflict: string; characterDriven: string; summary: string; wordTarget: string; relatedCharacters?: string[]; relatedOrganizations?: string[]; relatedWorldview?: string[] }>
     expandedWorldview: Array<{ type: string; title: string; content: string }>
   }
   validate: {
@@ -64,6 +69,9 @@ export interface ProjectWorkspaceSeed {
   }
   worldviewEntries: WorldviewEntry[]
   characters: CharacterCard[]
+  organizations: OrganizationEntry[]
+  characterRelationships: CharacterRelationship[]
+  organizationMemberships: OrganizationMembership[]
   outlineVolumes: OutlineVolume[]
   outlineItems: OutlineItem[]
   chapters: ChapterDraft[]
@@ -117,6 +125,17 @@ function normalizeChapterWordTarget(value: unknown, novelLength: NovelLength, fa
   const parsed = matched ? Number(matched[0]) : fallbackNumber
   const clamped = Math.min(maximum, Math.max(minimum, Number.isFinite(parsed) ? parsed : fallbackNumber))
   return String(Math.round(clamped / 100) * 100)
+}
+
+function mapCharacterTags(value: unknown, role: string): Array<{ label: string }> {
+  if (!Array.isArray(value)) return []
+  const normalizedRole = role.trim()
+  return [...new Set(value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter((item) => item && item !== normalizedRole))]
+    .slice(0, 5)
+    .map((label) => ({ label }))
 }
 
 function buildBlankStarterChapter(
@@ -177,7 +196,7 @@ export function createProjectWorkspaceSeedFromSpiral(
     role: '主角',
     description: `核心欲望：${spiral.seed.protagonist.coreDesire}\n核心缺陷：${spiral.seed.protagonist.coreFlaw}\n内在矛盾：${spiral.seed.protagonist.innerConflict}`,
     avatar: '',
-    tags: [{ label: '主角' }]
+    tags: mapCharacterTags(spiral.seed.protagonist.tags, '主角')
   }
 
   const supportingCards: CharacterCard[] = spiral.expand.supportingCharacters.map((c, index) => ({
@@ -186,10 +205,11 @@ export function createProjectWorkspaceSeedFromSpiral(
     role: c.role,
     description: `与主角关系：${c.relationToProtagonist}\n动机：${c.motivation}`,
     avatar: '',
-    tags: [{ label: c.role }]
+    tags: mapCharacterTags(c.tags, c.role)
   }))
 
   const characters = [protagonistCard, ...supportingCards]
+  const characterNamesBeforePatches = new Map(characters.map((character) => [character.name.trim(), character.id]))
 
   // 应用第三圈校验产出的角色修补
   const charPatches = spiral.validate.patches.characterAdjustments ?? []
@@ -202,6 +222,54 @@ export function createProjectWorkspaceSeedFromSpiral(
     }
   }
 
+  const characterIdByName = new Map([
+    ...characterNamesBeforePatches.entries(),
+    ...characters.map((character) => [character.name.trim(), character.id] as const)
+  ])
+  const organizations: OrganizationEntry[] = spiral.expand.organizations.map((organization, index) => ({
+    id: createSeedId('org', index, timestamp),
+    name: organization.name?.trim() || `组织 ${index + 1}`,
+    type: organization.type?.trim() || '势力',
+    description: organization.description?.trim() || '待补充组织定位。',
+    motto: organization.motto?.trim() || '',
+    color: '',
+    sortOrder: index,
+    createdAt,
+    updatedAt: createdAt
+  }))
+  const organizationIdByName = new Map(organizations.map((organization) => [organization.name.trim(), organization.id]))
+  const worldviewIdByTitle = new Map(worldviewEntries.map((entry) => [entry.title.trim(), entry.id]))
+  const organizationMemberships: OrganizationMembership[] = []
+  for (const [organizationIndex, organization] of spiral.expand.organizations.entries()) {
+    const organizationId = organizations[organizationIndex]?.id
+    if (!organizationId) continue
+    for (const [memberIndex, member] of (organization.members ?? []).entries()) {
+      const characterId = characterIdByName.get(member.characterName?.trim())
+      if (!characterId) continue
+      organizationMemberships.push({
+        id: createSeedId('membership', organizationIndex * 10 + memberIndex, timestamp),
+        characterId,
+        organizationId,
+        role: member.role?.trim() || '成员',
+        notes: member.notes?.trim() || '',
+        createdAt,
+        updatedAt: createdAt
+      })
+    }
+  }
+  const characterRelationships: CharacterRelationship[] = (spiral.expand.relationships ?? [])
+    .map((relationship, index) => ({
+      id: createSeedId('relationship', index, timestamp),
+      fromCharacterId: characterIdByName.get(relationship.fromCharacter?.trim()) ?? '',
+      toCharacterId: characterIdByName.get(relationship.toCharacter?.trim()) ?? '',
+      type: relationship.type?.trim() || '关系',
+      description: relationship.description?.trim() || '待补充关系说明。',
+      intensity: Math.min(100, Math.max(0, Number(relationship.intensity) || 50)),
+      createdAt,
+      updatedAt: createdAt
+    }))
+    .filter((relationship) => relationship.fromCharacterId && relationship.toCharacterId && relationship.fromCharacterId !== relationship.toCharacterId)
+
   const outlineItems = spiral.expand.outlineBeats.map((beat, index) => {
     const baseSummary = beat.summary?.trim() || '待补充剧情摘要。'
     const driven = beat.characterDriven?.trim()
@@ -213,6 +281,15 @@ export function createProjectWorkspaceSeedFromSpiral(
       wordTarget: normalizeChapterWordTarget(beat.wordTarget, novelLength, preset.chapterWordTarget),
       conflict: beat.conflict?.trim() || '待设定',
       summary,
+      relatedCharacterIds: [...new Set((beat.relatedCharacters ?? [])
+        .map((name) => characterIdByName.get(name.trim()))
+        .filter((id): id is string => Boolean(id)))],
+      relatedOrganizationIds: [...new Set((beat.relatedOrganizations ?? [])
+        .map((name) => organizationIdByName.get(name.trim()))
+        .filter((id): id is string => Boolean(id)))],
+      relatedWorldviewIds: [...new Set((beat.relatedWorldview ?? [])
+        .map((title) => worldviewIdByTitle.get(title.trim()))
+        .filter((id): id is string => Boolean(id)))],
       status: 'planned' as const,
       sortOrder: index
     }
@@ -256,6 +333,9 @@ export function createProjectWorkspaceSeedFromSpiral(
     },
     worldviewEntries,
     characters,
+    organizations,
+    characterRelationships,
+    organizationMemberships,
     outlineVolumes,
     outlineItems,
     chapters
@@ -328,6 +408,9 @@ export function createProjectWorkspaceSeed(
     },
     worldviewEntries,
     characters: [],
+    organizations: [],
+    characterRelationships: [],
+    organizationMemberships: [],
     outlineVolumes,
     outlineItems,
     chapters

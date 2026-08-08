@@ -1039,9 +1039,15 @@ export const useAppStore = defineStore('app', () => {
   }
 
   // ── 项目 CRUD ──
+  /** 为尚未完成生成的项目预留稳定 ID，使生成期间的 AI 运行记录可归档到目标项目。 */
+  function reserveProjectId(): string {
+    return uniqueId('project')
+  }
+
   /** 从向导创建完整项目工作区：分配 ID、设置默认分卷和章节、切换到工作台 */
-  function createProjectWorkspace(payload: ProjectWorkspacePayload): string {
-    const projectId = uniqueId('project')
+  function createProjectWorkspace(payload: ProjectWorkspacePayload, requestedProjectId?: string): string {
+    const projectId = requestedProjectId?.trim() || uniqueId('project')
+    const pendingWorkspace = projectWorkspaces.value[projectId]
     const nextVolumes = payload.outlineVolumes?.length ? payload.outlineVolumes : [createWorkspaceVolume()]
     const nextChapters = payload.chapters?.length ? payload.chapters : [buildStarterChapter(nextVolumes[0].id)]
     const computedWordCount = formatProjectWordCount(nextChapters)
@@ -1079,7 +1085,9 @@ export const useAppStore = defineStore('app', () => {
         chapters: nextChapters,
         chapterVersions: payload.chapterVersions,
         plotThreads: payload.plotThreads,
-        messages: payload.messages
+        messages: payload.messages,
+        // AI 生成在项目正式切换前已经开始时，保留预留 ID 下收到的运行记录。
+        aiRuns: pendingWorkspace?.aiRuns
       })
     }
     selectedProjectId.value = projectId
@@ -3336,6 +3344,7 @@ export const useAppStore = defineStore('app', () => {
     closeWizard,
     createProject,
     createProjectWorkspace,
+    reserveProjectId,
     createCharacter,
     createCharacterRelationship,
     createInspirationEntry,

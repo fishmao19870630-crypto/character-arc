@@ -551,7 +551,9 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
         if (!event.sender.isDestroyed()) {
           event.sender.send('characterarc:ai-spiral-progress', progressEvent)
         }
-      }, controller.signal)
+      }, controller.signal, (meta) => {
+        deps!.emitAiRunEvent({ projectId: meta.projectId, meta: { id: randomUUID(), ...meta } })
+      })
 
       return { success: true, result }
     } catch (error) {

@@ -1,4 +1,4 @@
-import type { AppSettings, AiTaskPayload, AiTaskKnowledgeContext } from '../shared-types'
+import type { AppSettings, AiTaskPayload, AiRunMeta } from '../shared-types'
 import type {
   SpiralSeedResult,
   SpiralExpandResult,
@@ -21,10 +21,13 @@ export interface SpiralBootstrapInput {
 
 /** 螺旋引导进度回调函数类型 */
 export type SpiralProgressCallback = (event: SpiralProgressEvent) => void
+export type SpiralRunMetaCallback = (meta: AiRunMeta) => void
 
 /** expand 阶段降级时使用的空结果 */
 const EMPTY_EXPAND: SpiralExpandResult = {
   supportingCharacters: [],
+  organizations: [],
+  relationships: [],
   outlineBeats: [],
   expandedWorldview: []
 }
@@ -48,7 +51,8 @@ const EMPTY_VALIDATE: SpiralValidateResult = {
 export async function runSpiralBootstrap(
   input: SpiralBootstrapInput,
   onProgress?: SpiralProgressCallback,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onRunMeta?: SpiralRunMetaCallback
 ): Promise<SpiralBootstrapResult> {
   const baseContext: Record<string, unknown> = {
     projectTitle: input.projectTitle,
@@ -66,7 +70,17 @@ export async function runSpiralBootstrap(
     settings: input.settings,
     context: { ...baseContext }
   }
-  const seedResponse = await runAiTask(seedPayload, undefined, signal)
+  let seedResponse
+  try {
+    seedResponse = await runAiTask(seedPayload, undefined, signal)
+    onRunMeta?.(seedResponse.meta)
+  } catch (error) {
+    const meta = error && typeof error === 'object' && 'aiRunMeta' in error
+      ? (error as { aiRunMeta?: AiRunMeta }).aiRunMeta
+      : undefined
+    if (meta) onRunMeta?.(meta)
+    throw error
+  }
   const seed = seedResponse.result as unknown as SpiralSeedResult
   onProgress?.({ phase: 'seed', status: 'done', result: seed })
 
@@ -82,9 +96,14 @@ export async function runSpiralBootstrap(
       context: { ...baseContext, spiralSeedResult: seed }
     }
     const expandResponse = await runAiTask(expandPayload, undefined, signal)
+    onRunMeta?.(expandResponse.meta)
     expand = expandResponse.result as unknown as SpiralExpandResult
     onProgress?.({ phase: 'expand', status: 'done', result: expand })
   } catch (error) {
+    const meta = error && typeof error === 'object' && 'aiRunMeta' in error
+      ? (error as { aiRunMeta?: AiRunMeta }).aiRunMeta
+      : undefined
+    if (meta) onRunMeta?.(meta)
     if (signal?.aborted) throw new Error('螺旋生成已取消')
     onProgress?.({ phase: 'expand', status: 'error', error: error instanceof Error ? error.message : '展开失败' })
   }
@@ -101,9 +120,14 @@ export async function runSpiralBootstrap(
       context: { ...baseContext, spiralSeedResult: seed, spiralExpandResult: expand }
     }
     const validateResponse = await runAiTask(validatePayload, undefined, signal)
+    onRunMeta?.(validateResponse.meta)
     validate = validateResponse.result as unknown as SpiralValidateResult
     onProgress?.({ phase: 'validate', status: 'done', result: validate })
   } catch (error) {
+    const meta = error && typeof error === 'object' && 'aiRunMeta' in error
+      ? (error as { aiRunMeta?: AiRunMeta }).aiRunMeta
+      : undefined
+    if (meta) onRunMeta?.(meta)
     if (signal?.aborted) throw new Error('螺旋生成已取消')
     onProgress?.({ phase: 'validate', status: 'error', error: error instanceof Error ? error.message : '校验失败' })
   }
