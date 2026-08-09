@@ -1486,28 +1486,31 @@ export const useAppStore = defineStore('app', () => {
   }
 
   // ── 角色 CRUD ──
-  /** 创建新角色卡，插入到列表头部 */
+  /** 创建新角色卡，追加到列表末尾，保持旧角色优先展示 */
   function createCharacter(payload?: Partial<CharacterCard>): string {
     const characterId = uniqueId('char')
-    updateCurrentWorkspace((workspace) => ({
-      ...workspace,
-      characters: [
-        {
-          id: characterId,
-          name: payload?.name?.trim() || `新角色 ${workspace.characters.length + 1}`,
-          role: payload?.role?.trim() || '待设定',
-          avatar: payload?.avatar || 'linear-gradient(135deg, #9be15d 0%, #00e3ae 100%)',
-          description:
-            payload?.description?.trim() ||
-            '这是一名新加入项目的角色草稿。你可以继续补充身份、背景、动机与冲突。',
-          tags:
-            payload?.tags?.length
-              ? payload.tags
-              : [{ label: '待完善', tone: 'warning' }]
-        },
-        ...workspace.characters
-      ]
-    }))
+    updateCurrentWorkspace((workspace) => {
+      const character: CharacterCard = {
+        id: characterId,
+        name: payload?.name?.trim() || `新角色 ${workspace.characters.length + 1}`,
+        role: payload?.role?.trim() || '待设定',
+        avatar: payload?.avatar || 'linear-gradient(135deg, #9be15d 0%, #00e3ae 100%)',
+        description:
+          payload?.description?.trim() ||
+          '这是一名新加入项目的角色草稿。你可以继续补充身份、背景、动机与冲突。',
+        tags:
+          payload?.tags?.length
+            ? payload.tags
+            : [{ label: '待完善', tone: 'warning' }]
+      }
+      return {
+        ...workspace,
+        characters: [
+          ...workspace.characters,
+          character
+        ]
+      }
+    })
     schedulePersist('fast')
     return characterId
   }
@@ -3156,7 +3159,7 @@ export const useAppStore = defineStore('app', () => {
    * - 无论 executor 抛异常还是成功返回，任务都会被标记为结束并在短暂保留后自动清理。
    * - 返回值是 executor 的返回值，方便调用方继续处理结果。
    * - 自动生成 `clientTaskId` 并注入到 executor 的闭包上下文中（通过 `getClientTaskId()`）。
-   * - 默认 90s 超时；超时后自动通知主进程 abort 并标记任务失败。
+   * - 不按运行时长自动取消；网络错误、协议错误或用户手动取消时结束。
    *
    * @throws 保留 executor 原始错误抛出，让上层可以 try/catch 常规处理。
    */
@@ -3180,38 +3183,15 @@ export const useAppStore = defineStore('app', () => {
       next.set(input.key, run)
     })
 
-    // 超时控制：优先使用任务级覆盖，其次读取用户配置
-    const timeoutMs = input.timeoutMs ?? (appSettings.value.aiTimeoutSeconds * 1000)
-    let timeoutHandle: number | null = null
-    let timedOut = false
-
-    const timeoutPromise = timeoutMs > 0
-      ? new Promise<never>((_, reject) => {
-          timeoutHandle = window.setTimeout(() => {
-            timedOut = true
-            // 通知主进程 abort
-            window.characterArc.cancelAiTask(clientTaskId).catch(() => {})
-            reject(new Error(`AI 任务超时（${Math.round(timeoutMs / 1000)}s），已自动取消。`))
-          }, timeoutMs)
-        })
-      : null
-
     try {
-      const result = timeoutPromise
-        ? await Promise.race([executor(), timeoutPromise])
-        : await executor()
+      const result = await executor()
       finalizeAiTask(input.key, 'done')
       return result
     } catch (error) {
-      const msg = timedOut
-        ? `AI 任务超时（${Math.round(timeoutMs / 1000)}s），已自动取消。`
-        : (error instanceof Error ? error.message : String(error))
+      const msg = error instanceof Error ? error.message : String(error)
       finalizeAiTask(input.key, 'error', msg)
       throw error
     } finally {
-      if (timeoutHandle !== null) {
-        window.clearTimeout(timeoutHandle)
-      }
       currentClientTaskId = null
     }
   }

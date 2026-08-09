@@ -44,6 +44,25 @@ test('SSE 长时间没有新数据时返回可识别的空闲超时', async () =
   await reader.cancel()
 })
 
+test('Provider 默认等待首响应和流数据，不按时间主动中止', async () => {
+  const requestFetch = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const stream = new ReadableStream({
+      async start(controller) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"完成"},"finish_reason":"stop"}]}\n\n'))
+        controller.close()
+      }
+    })
+    return new Response(stream, {
+      headers: { 'content-type': 'text/event-stream' }
+    })
+  }
+
+  const response = await createProviderTransportFetch(requestFetch)('https://example.test')
+  assert.match(await response.text(), /完成/)
+})
+
 test('等待响应头超时不会永久卡在请求阶段', async () => {
   const neverResponds = () => new Promise(() => {})
 

@@ -80,7 +80,7 @@ export class AiStreamProtocolError extends Error {
 
 export function createTerminalAwareSseStream(
   source: ReadableStream<Uint8Array>,
-  idleTimeoutMs: number,
+  idleTimeoutMs = 0,
   transformEvent: (event: string) => string = (event) => event
 ): ReadableStream<Uint8Array> {
   const reader = source.getReader()
@@ -97,7 +97,9 @@ export function createTerminalAwareSseStream(
         // 一个 SSE event 可能被拆成多个很小的网络 chunk。若尚未读到事件分隔符，
         // 必须在本次 pull 内继续读取；直接返回且没有 enqueue 会令下游永久停住。
         while (!settled) {
-          const { done, value } = await readStreamChunkWithIdleTimeout(reader, idleTimeoutMs)
+          const { done, value } = idleTimeoutMs > 0
+            ? await readStreamChunkWithIdleTimeout(reader, idleTimeoutMs)
+            : await reader.read()
           if (settled) return
 
           buffer += done
@@ -215,20 +217,18 @@ export async function fetchWithResponseStartTimeout(
 }
 
 /**
- * 为 AI SDK provider 增加连接超时和 SSE 空闲超时，但保持事件内容完全不变。
+ * 为 AI SDK provider 增加 SSE 完成事件感知，并允许调用方按需显式启用超时。
+ * 默认不按时间中止请求，由网络错误、协议结束事件或用户取消决定生命周期。
  */
 export function createProviderTransportFetch(
   requestFetch: typeof fetch,
-  idleTimeoutMs: number,
-  responseStartTimeoutMs: number
+  idleTimeoutMs = 0,
+  responseStartTimeoutMs = 0
 ): typeof fetch {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const response = await fetchWithResponseStartTimeout(
-      requestFetch,
-      input,
-      init,
-      responseStartTimeoutMs
-    )
+    const response = responseStartTimeoutMs > 0
+      ? await fetchWithResponseStartTimeout(requestFetch, input, init, responseStartTimeoutMs)
+      : await requestFetch(input, init)
     if (!response.ok || !response.body) return response
 
     const contentType = response.headers.get('content-type') || ''

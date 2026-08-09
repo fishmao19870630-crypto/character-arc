@@ -32,6 +32,13 @@ import chapterRepair from './chapter-repair'
 import chapterSessionNote from './chapter-session-note'
 import spiralSeed from './spiral-seed'
 import spiralExpand from './spiral-expand'
+import {
+  spiralCharacters,
+  spiralOrganizations,
+  spiralRelationships,
+  spiralWorldviewExpand,
+  spiralOutline
+} from './spiral-stages'
 import spiralValidate from './spiral-validate'
 import characterEnhance from './character-enhance'
 import worldviewEnhance from './worldview-enhance'
@@ -83,6 +90,11 @@ register(chapterRepair)
 register(chapterSessionNote)
 register(spiralSeed)
 register(spiralExpand)
+register(spiralCharacters)
+register(spiralOrganizations)
+register(spiralRelationships)
+register(spiralWorldviewExpand)
+register(spiralOutline)
 register(spiralValidate)
 register(characterEnhance)
 register(worldviewEnhance)

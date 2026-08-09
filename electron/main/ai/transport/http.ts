@@ -1,5 +1,3 @@
-import { AI_REQUEST_TIMEOUT_MS } from '../shared-types'
-
 /** 从错误响应体中提取可读的错误信息 */
 async function readErrorMessage(response: Response, fallbackLabel: string): Promise<string> {
   const fallback = `${fallbackLabel} 请求失败：${response.status} ${response.statusText}`
@@ -35,7 +33,7 @@ async function performAiRequest(
   let reqInit: RequestInit
   let label: string
   let signal: AbortSignal | undefined
-  let timeoutMs: number
+  let timeoutMs: number | undefined
   let requestFetch: typeof fetch
 
   if (typeof urlOrOpts === 'object') {
@@ -43,22 +41,24 @@ async function performAiRequest(
     reqInit = urlOrOpts.init
     label = urlOrOpts.providerLabel
     signal = urlOrOpts.externalSignal
-    timeoutMs = urlOrOpts.timeoutMs ?? AI_REQUEST_TIMEOUT_MS
+    timeoutMs = urlOrOpts.timeoutMs
     requestFetch = urlOrOpts.requestFetch ?? globalThis.fetch
   } else {
     url = urlOrOpts
     reqInit = init!
     label = providerLabel!
     signal = externalSignal
-    timeoutMs = AI_REQUEST_TIMEOUT_MS
+    timeoutMs = undefined
     requestFetch = globalThis.fetch
   }
 
-  const timeoutCtl = new AbortController()
-  const timer = setTimeout(() => timeoutCtl.abort(), timeoutMs)
-  const combinedSignal = signal
-    ? AbortSignal.any([signal, timeoutCtl.signal])
-    : timeoutCtl.signal
+  const timeoutCtl = timeoutMs && timeoutMs > 0 ? new AbortController() : undefined
+  const timer = timeoutCtl ? setTimeout(() => timeoutCtl.abort(), timeoutMs) : undefined
+  const combinedSignal = timeoutCtl
+    ? signal
+      ? AbortSignal.any([signal, timeoutCtl.signal])
+      : timeoutCtl.signal
+    : signal
   try {
     const response = await requestFetch(url, { ...reqInit, signal: combinedSignal })
     if (!response.ok) {
@@ -68,11 +68,13 @@ async function performAiRequest(
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       if (signal?.aborted) throw error
-      throw new Error(`${label} 请求超时，请检查网络、代理或模型服务状态。`)
+      if (timeoutCtl?.signal.aborted) {
+        throw new Error(`${label} 请求超时，请检查网络、代理或模型服务状态。`)
+      }
     }
     throw error
   } finally {
-    clearTimeout(timer)
+    if (timer) clearTimeout(timer)
   }
 }
 

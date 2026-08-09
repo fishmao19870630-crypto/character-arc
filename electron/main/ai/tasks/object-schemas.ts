@@ -331,6 +331,52 @@ const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
     })),
     expandedWorldview: z.array(worldviewEntrySchema)
   }),
+  'spiral-characters': z.object({
+    supportingCharacters: z.array(z.object({
+      name: stringField,
+      role: stringField,
+      tags: stringList.min(3).max(5),
+      relationToProtagonist: stringField,
+      motivation: stringField
+    })).min(6).max(8)
+  }),
+  'spiral-organizations': z.object({
+    organizations: z.array(z.object({
+      name: stringField,
+      type: stringField,
+      description: stringField,
+      motto: stringField,
+      members: z.array(z.object({
+        characterName: stringField,
+        role: stringField,
+        notes: stringField
+      })).min(2).max(8)
+    })).min(3).max(5)
+  }),
+  'spiral-relationships': z.object({
+    relationships: z.array(z.object({
+      fromCharacter: stringField,
+      toCharacter: stringField,
+      type: stringField,
+      description: stringField,
+      intensity: z.number().min(0).max(100)
+    })).min(8).max(12)
+  }),
+  'spiral-worldview-expand': z.object({
+    expandedWorldview: z.array(worldviewEntrySchema).min(4).max(6)
+  }),
+  'spiral-outline': z.object({
+    outlineBeats: z.array(z.object({
+      title: stringField,
+      conflict: stringField,
+      characterDriven: stringField,
+      summary: stringField,
+      wordTarget: stringField,
+      relatedCharacters: stringList,
+      relatedOrganizations: stringList,
+      relatedWorldview: stringList
+    }))
+  }),
   'spiral-validate': z.object({
     arcValidation: z.object({
       isComplete: z.boolean(),

@@ -64,7 +64,6 @@ export async function generateImage(settings: AppSettings, prompt: string): Prom
   }
 
   const url = `${normalized.baseUrl.replace(/\/$/, '')}/images/generations`
-  const timeoutMs = settings.aiTimeoutSeconds ? settings.aiTimeoutSeconds * 1000 : undefined
   const requestFetch = createProxyFetch(settings.proxyUrl)
 
   // 默认请求 b64_json 以获得可本地保存的自包含图片；部分 provider（如 gpt-image-1、
@@ -87,7 +86,6 @@ export async function generateImage(settings: AppSettings, prompt: string): Prom
       body: buildBody(includeResponseFormat)
     },
     providerLabel: '图片生成接口',
-    timeoutMs,
     requestFetch
   })
 
@@ -140,7 +138,7 @@ export async function generateImage(settings: AppSettings, prompt: string): Prom
 
   if (first.url?.trim()) {
     // 部分 provider 返回远程 URL；本地保存功能只接受 data URL，这里下载并转 base64 兜底。
-    const dataUrl = await remoteImageToDataUrl(first.url.trim(), timeoutMs, requestFetch)
+    const dataUrl = await remoteImageToDataUrl(first.url.trim(), requestFetch)
     return {
       dataUrl,
       revisedPrompt: first.revised_prompt?.trim() || undefined,
@@ -152,13 +150,12 @@ export async function generateImage(settings: AppSettings, prompt: string): Prom
 }
 
 /** 下载远程图片并转成 base64 data URL；失败时回退为原始 URL。 */
-async function remoteImageToDataUrl(url: string, timeoutMs: number | undefined, requestFetch: typeof fetch): Promise<string> {
+async function remoteImageToDataUrl(url: string, requestFetch: typeof fetch): Promise<string> {
   try {
     const response = await performAiRequest({
       url,
       init: { method: 'GET' },
       providerLabel: '图片下载',
-      timeoutMs,
       requestFetch
     })
     const contentType = response.headers.get('content-type')?.split(';')[0]?.trim() || ''

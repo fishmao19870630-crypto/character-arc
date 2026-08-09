@@ -1,10 +1,15 @@
 import type { AppSettings, AiTaskPayload, AiRunMeta } from '../shared-types'
 import type {
+  SpiralCharacterRelationship,
   SpiralSeedResult,
   SpiralExpandResult,
+  SpiralOrganization,
+  SpiralOutlineBeat,
+  SpiralSupportingCharacter,
   SpiralValidateResult,
   SpiralBootstrapResult,
-  SpiralProgressEvent
+  SpiralProgressEvent,
+  SpiralWorldRule
 } from './types'
 import { runAiTask } from '../runtime/orchestrator'
 
@@ -22,6 +27,24 @@ export interface SpiralBootstrapInput {
 /** 螺旋引导进度回调函数类型 */
 export type SpiralProgressCallback = (event: SpiralProgressEvent) => void
 export type SpiralRunMetaCallback = (meta: AiRunMeta) => void
+
+async function runSpiralTask<T>(
+  payload: AiTaskPayload,
+  signal?: AbortSignal,
+  onRunMeta?: SpiralRunMetaCallback
+): Promise<T> {
+  try {
+    const response = await runAiTask(payload, undefined, signal)
+    onRunMeta?.(response.meta)
+    return response.result as unknown as T
+  } catch (error) {
+    const meta = error && typeof error === 'object' && 'aiRunMeta' in error
+      ? (error as { aiRunMeta?: AiRunMeta }).aiRunMeta
+      : undefined
+    if (meta) onRunMeta?.(meta)
+    throw error
+  }
+}
 
 /** expand 阶段降级时使用的空结果 */
 const EMPTY_EXPAND: SpiralExpandResult = {
@@ -86,26 +109,51 @@ export async function runSpiralBootstrap(
 
   if (signal?.aborted) throw new Error('螺旋生成已取消')
 
-  // 第二圈失败时降级：用空 expand 结果，仍可从 seed 创建基础 workspace
+  // 第二圈拆成多次专门请求，减少单次大 JSON 漏掉角色、组织或大纲字段的概率。
   let expand: SpiralExpandResult = EMPTY_EXPAND
   onProgress?.({ phase: 'expand', status: 'running' })
   try {
-    const expandPayload: AiTaskPayload = {
-      task: 'spiral-expand',
+    const charactersResult = await runSpiralTask<{ supportingCharacters: SpiralSupportingCharacter[] }>({
+      task: 'spiral-characters',
       settings: input.settings,
       context: { ...baseContext, spiralSeedResult: seed }
-    }
-    const expandResponse = await runAiTask(expandPayload, undefined, signal)
-    onRunMeta?.(expandResponse.meta)
-    expand = expandResponse.result as unknown as SpiralExpandResult
+    }, signal, onRunMeta)
+    const supportingCharacters = charactersResult.supportingCharacters
+
+    const organizationsResult = await runSpiralTask<{ organizations: SpiralOrganization[] }>({
+      task: 'spiral-organizations',
+      settings: input.settings,
+      context: { ...baseContext, spiralSeedResult: seed, supportingCharacters }
+    }, signal, onRunMeta)
+    const organizations = organizationsResult.organizations
+
+    const relationshipsResult = await runSpiralTask<{ relationships: SpiralCharacterRelationship[] }>({
+      task: 'spiral-relationships',
+      settings: input.settings,
+      context: { ...baseContext, spiralSeedResult: seed, supportingCharacters, organizations }
+    }, signal, onRunMeta)
+    const relationships = relationshipsResult.relationships
+
+    const worldviewResult = await runSpiralTask<{ expandedWorldview: SpiralWorldRule[] }>({
+      task: 'spiral-worldview-expand',
+      settings: input.settings,
+      context: { ...baseContext, spiralSeedResult: seed, supportingCharacters, organizations, relationships }
+    }, signal, onRunMeta)
+    const expandedWorldview = worldviewResult.expandedWorldview
+
+    const outlineResult = await runSpiralTask<{ outlineBeats: SpiralOutlineBeat[] }>({
+      task: 'spiral-outline',
+      settings: input.settings,
+      context: { ...baseContext, spiralSeedResult: seed, supportingCharacters, organizations, relationships, expandedWorldview }
+    }, signal, onRunMeta)
+    const outlineBeats = outlineResult.outlineBeats
+
+    expand = { supportingCharacters, organizations, relationships, outlineBeats, expandedWorldview }
     onProgress?.({ phase: 'expand', status: 'done', result: expand })
   } catch (error) {
-    const meta = error && typeof error === 'object' && 'aiRunMeta' in error
-      ? (error as { aiRunMeta?: AiRunMeta }).aiRunMeta
-      : undefined
-    if (meta) onRunMeta?.(meta)
     if (signal?.aborted) throw new Error('螺旋生成已取消')
     onProgress?.({ phase: 'expand', status: 'error', error: error instanceof Error ? error.message : '展开失败' })
+    throw error
   }
 
   if (signal?.aborted) throw new Error('螺旋生成已取消')

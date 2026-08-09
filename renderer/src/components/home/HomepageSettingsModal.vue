@@ -37,14 +37,6 @@ const uiScaleOptions = [
   { label: '125%', value: 1.25 },
   { label: '140%', value: 1.4 }
 ]
-const aiTimeoutOptions = [
-  { label: '30 秒', value: 30 },
-  { label: '60 秒', value: 60 },
-  { label: '120 秒', value: 120 },
-  { label: '180 秒（默认）', value: 180 },
-  { label: '300 秒', value: 300 },
-  { label: '600 秒', value: 600 }
-]
 const apiProtocolOptions = [
   { label: '自动（按厂商模型目录）', value: 'auto' },
   { label: 'OpenAI Responses', value: 'openai-responses' },
@@ -754,18 +746,6 @@ async function saveSettings(): Promise<void> {
                 :value="draftSettings.uiScale"
                 @update:value="(value) => { draftSettings.uiScale = value ?? 1 }"
               />
-            </n-form-item>
-          </div>
-          <div class="settings-grid">
-            <n-form-item label="AI 请求超时时间">
-              <div class="preset-field">
-                <n-select
-                  :options="aiTimeoutOptions"
-                  :value="draftSettings.aiTimeoutSeconds"
-                  @update:value="(value) => { draftSettings.aiTimeoutSeconds = value ?? 180 }"
-                />
-                <span class="preset-hint">超时后会主动终止本次请求，适当增大可避免慢模型被误中断。</span>
-              </div>
             </n-form-item>
           </div>
           <div class="dark-mode-row">

@@ -920,7 +920,7 @@ export interface AppSettings {
   darkMode: boolean
   /** 深色模式风格预设 */
   darkModeStyle: DarkModeStyle
-  /** AI 请求超时时间（秒），超时后主动终止本次请求 */
+  /** 旧数据兼容字段；AI 请求不再按时长自动取消。 */
   aiTimeoutSeconds: number
 }
 

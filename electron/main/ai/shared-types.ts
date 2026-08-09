@@ -44,7 +44,7 @@ export type AppSettings = {
   imageApiKey: string
   /** 可选：图片生成独立 Base URL */
   imageBaseUrl: string
-  /** AI 请求超时（秒），默认 180 */
+  /** 旧数据兼容字段；AI 请求不再按时长自动取消。 */
   aiTimeoutSeconds?: number
 }
 
@@ -76,6 +76,11 @@ export type AiTaskName =
   | 'premise-enhance'
   | 'spiral-seed'
   | 'spiral-expand'
+  | 'spiral-characters'
+  | 'spiral-organizations'
+  | 'spiral-relationships'
+  | 'spiral-worldview-expand'
+  | 'spiral-outline'
   | 'spiral-validate'
   | 'chapter-analysis'
   | 'chapter-repair'
@@ -573,8 +578,6 @@ export type AiAgentStreamHandlers = {
   onEditApplied: (chapterId: string, editType: string, preview: string, versionId: string) => void
   onEditProposed: (chapterId: string, proposalId: string, editType: string, preview: string, oldContent: string, newContent: string) => void
 }
-
-export const AI_REQUEST_TIMEOUT_MS = 180_000
 
 /** Agent loop 单次任务最多允许的工具循环轮数。超过即抛错，避免死循环吃 token。 */
 export const AGENT_MAX_TOOL_ITERATIONS = 8

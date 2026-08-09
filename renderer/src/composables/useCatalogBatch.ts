@@ -54,7 +54,6 @@ export function useCatalogBatch() {
           label: options.label,
           description: `正在生成 ${entries.length + 1}-${entries.length + batchCount} / ${total}`,
           panel: options.panel,
-          timeoutMs: 0
         },
         () => window.characterArc.generateAi(toIpcPayload({
           task: 'catalog-batch',

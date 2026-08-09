@@ -5,14 +5,6 @@ import { createProxyFetch } from './proxy-fetch'
 import { createProviderTransportFetch } from './sse'
 import { createProtocolModel } from './protocol-adapter'
 
-const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 60_000
-const DEFAULT_RESPONSE_START_TIMEOUT_MS = 30_000
-
-function resolveStreamIdleTimeoutMs(settings: AppSettings): number {
-  const configuredMs = (settings.aiTimeoutSeconds ?? 180) * 1000
-  return Math.min(DEFAULT_STREAM_IDLE_TIMEOUT_MS, Math.max(30_000, configuredMs))
-}
-
 const ANTHROPIC_PROMPT_CACHE = {
   type: 'ephemeral' as const,
   ttl: '5m' as const
@@ -35,11 +27,7 @@ export function createModel(
   options?: { requestFetch?: typeof fetch }
 ): LanguageModel {
   const requestFetch = options?.requestFetch ?? createProxyFetch(settings.proxyUrl)
-  const customFetch = createProviderTransportFetch(
-    requestFetch,
-    resolveStreamIdleTimeoutMs(settings),
-    Math.min(DEFAULT_RESPONSE_START_TIMEOUT_MS, resolveStreamIdleTimeoutMs(settings))
-  )
+  const customFetch = createProviderTransportFetch(requestFetch)
   return createProtocolModel({
     protocol: resolveAiProviderProtocol(settings.provider, settings.model, settings.apiProtocol),
     providerName: settings.provider === 'ollama' ? 'ollama' : settings.provider,
