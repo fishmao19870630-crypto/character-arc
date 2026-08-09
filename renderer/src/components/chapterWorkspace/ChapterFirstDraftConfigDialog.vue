@@ -32,10 +32,29 @@ const targetWordCount = ref(3000)
 const selectedRefIds = ref<string[]>([])
 const userPrompt = ref('')
 const expandedStepId = ref<FirstDraftStepId | null>('draft')
+const discoveredProjectSkills = ref<ProjectSkillItem[]>([])
+const hasScannedProjectSkills = ref(false)
+const isLoadingProjectSkills = ref(false)
+const projectSkillsLoadError = ref('')
 const steps = reactive<Record<FirstDraftStepId, FirstDraftStepConfig>>(createDefaultFirstDraftSteps())
 
 const referenceWorks = computed(() => appStore.referenceWorks)
-const projectSkills = computed(() => project.value?.projectSkills ?? [])
+const projectSkills = computed(() => {
+  const savedSkills = project.value?.projectSkills ?? []
+  if (!hasScannedProjectSkills.value) return savedSkills
+
+  const savedSkillById = new Map(savedSkills.map((skill) => [skill.id, skill]))
+  return discoveredProjectSkills.value.map((skill) => {
+    const savedSkill = savedSkillById.get(skill.id)
+    return {
+      ...skill,
+      enabled: skill.compatibility === 'external-only'
+        ? false
+        : (savedSkill?.enabled ?? skill.enabled),
+      stageIds: savedSkill?.stageIds ?? skill.stageIds
+    }
+  })
+})
 const selectableProjectSkills = computed(() =>
   projectSkills.value.filter((skill) =>
     skill.category !== 'tool'
@@ -213,13 +232,51 @@ const failureOptions: Array<{ label: string; value: FirstDraftFailurePolicy }> =
   { label: '停止流程', value: 'stop' }
 ]
 
+let projectSkillsScanRequestId = 0
+
+async function scanAvailableProjectSkills(): Promise<void> {
+  const projectId = project.value?.id
+  const requestId = ++projectSkillsScanRequestId
+  discoveredProjectSkills.value = []
+  hasScannedProjectSkills.value = false
+  projectSkillsLoadError.value = ''
+
+  if (!projectId) {
+    isLoadingProjectSkills.value = false
+    return
+  }
+
+  isLoadingProjectSkills.value = true
+  try {
+    const result = await window.characterArc.scanProjectSkills(projectId)
+    if (requestId !== projectSkillsScanRequestId || !props.show || project.value?.id !== projectId) return
+    if (!result.success) {
+      throw new Error(result.error ?? 'skills 加载失败')
+    }
+    discoveredProjectSkills.value = result.skills ?? []
+    hasScannedProjectSkills.value = true
+  } catch (error) {
+    if (requestId !== projectSkillsScanRequestId || !props.show || project.value?.id !== projectId) return
+    projectSkillsLoadError.value = error instanceof Error ? error.message : 'skills 加载失败'
+  } finally {
+    if (requestId === projectSkillsScanRequestId) {
+      isLoadingProjectSkills.value = false
+    }
+  }
+}
+
 watch(() => props.show, (visible) => {
-  if (!visible) return
+  if (!visible) {
+    projectSkillsScanRequestId += 1
+    isLoadingProjectSkills.value = false
+    return
+  }
   targetWordCount.value = parseChapterWordTarget(chapter.value?.wordTarget) || 3000
   selectedRefIds.value = [...(project.value?.selectedReferenceWorkIds ?? [])]
   userPrompt.value = ''
   expandedStepId.value = 'draft'
   Object.assign(steps, createDefaultFirstDraftSteps())
+  void scanAvailableProjectSkills()
 })
 
 function toggleStep(stepId: FirstDraftStepId, value: boolean): void {
@@ -480,7 +537,10 @@ function handleConfirm(): void {
                       <span class="field-count">{{ getSelectedSkills(activeStep.id).length }} 个</span>
                     </div>
                   </div>
-                  <div v-if="selectableProjectSkills.length > 0" class="skill-picker-list arc-scrollbar">
+                  <div v-if="isLoadingProjectSkills" class="skill-picker-empty">
+                    正在加载可用 skills...
+                  </div>
+                  <div v-else-if="selectableProjectSkills.length > 0" class="skill-picker-list arc-scrollbar">
                     <button
                       v-for="skill in selectableProjectSkills"
                       :key="skill.id"
@@ -497,8 +557,8 @@ function handleConfirm(): void {
                       <span class="skill-picker-mark">{{ isSkillSelected(activeStep.id, skill.id) ? '已选' : '选择' }}</span>
                     </button>
                   </div>
-                  <div v-else class="skill-picker-empty">
-                    当前项目还没有适合初稿流程手动指定的 skills。
+                  <div v-else class="skill-picker-empty" :class="{ error: projectSkillsLoadError }">
+                    {{ projectSkillsLoadError || '当前项目还没有适合初稿流程手动指定的 skills。' }}
                   </div>
                 </section>
               </template>
@@ -1060,6 +1120,10 @@ function handleConfirm(): void {
   font-size: 12px;
   padding: 14px;
   text-align: center;
+}
+
+.skill-picker-empty.error {
+  color: var(--arc-danger, #d03050);
 }
 
 .dialog-footer {
