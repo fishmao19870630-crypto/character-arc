@@ -114,6 +114,7 @@ type ChapterAssistantContextInput = {
 export type ChapterFirstDraftContextInput = {
   project?: ProjectSummary
   chapter?: ChapterDraft
+  chapterIndex: number
   chapterVolume?: OutlineVolume
   relatedChapters: Array<{
     title: string
@@ -570,6 +571,9 @@ export function buildChapterFirstDraftContext(input: ChapterFirstDraftContextInp
     projectGenre: input.project?.genre,
     writingStyleLabel: writingStyle.label,
     writingStylePrompt: writingStyle.prompt,
+    chapterId: input.chapter?.id,
+    chapterIndex: input.chapterIndex,
+    deferStoryStateUntilFinal: true,
     chapterTitle: input.chapter?.title,
     chapterSummary: input.chapter?.summary,
     chapterStatus: input.chapter?.status,

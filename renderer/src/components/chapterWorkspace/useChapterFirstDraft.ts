@@ -721,6 +721,7 @@ export function useChapterFirstDraft(): {
           const context = buildChapterFirstDraftContext({
             project,
             chapter,
+            chapterIndex: Math.max(currentChapterIndex, 0),
             chapterVolume,
             relatedChapters,
             volumeChapterSummaries,

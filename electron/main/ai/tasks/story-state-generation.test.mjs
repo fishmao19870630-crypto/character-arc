@@ -4,6 +4,9 @@ import test from 'node:test'
 
 const taskContextSource = readFileSync(new URL('../runtime/task-context.ts', import.meta.url), 'utf8')
 const orchestratorSource = readFileSync(new URL('../runtime/orchestrator.ts', import.meta.url), 'utf8')
+const firstDraftContextSource = readFileSync(new URL('../../../../renderer/src/features/ai/chapterAssistantContext.ts', import.meta.url), 'utf8')
+const firstDraftFlowSource = readFileSync(new URL('../../../../renderer/src/components/chapterWorkspace/useChapterFirstDraft.ts', import.meta.url), 'utf8')
+const chapterMetaDialogSource = readFileSync(new URL('../../../../renderer/src/components/chapterWorkspace/ChapterMetaDialog.vue', import.meta.url), 'utf8')
 const projectIdContextFiles = [
   '../../../../renderer/src/composables/useCatalogBatch.ts',
   '../../../../renderer/src/components/CharactersPanel.vue',
@@ -60,4 +63,20 @@ test('相关界面请求会携带当前项目 ID', () => {
     const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8')
     assert.match(source, /projectId: appStore\.currentProject\?\.id/)
   }
+})
+
+test('初稿只建立索引，世界状态统一在章节定稿后同步', () => {
+  assert.match(firstDraftContextSource, /chapterId: input\.chapter\?\.id/)
+  assert.match(firstDraftContextSource, /chapterIndex: input\.chapterIndex/)
+  assert.match(firstDraftContextSource, /deferStoryStateUntilFinal: true/)
+  assert.match(firstDraftFlowSource, /chapterIndex: Math\.max\(currentChapterIndex, 0\)/)
+  assert.match(orchestratorSource, /context\.deferStoryStateUntilFinal === true/)
+  assert.match(chapterMetaDialogSource, /form\.status === 'final'/)
+  assert.match(chapterMetaDialogSource, /await appStore\.persistWorkspace\(\)/)
+  assert.match(chapterMetaDialogSource, /backfillProjectState\(toIpcPayload\(\{/)
+  assert.match(chapterMetaDialogSource, /selection: \{ mode: 'custom', chapterIds: \[chapterId\] \}/)
+  assert.match(chapterMetaDialogSource, /:loading="isSubmitting"/)
+  assert.match(chapterMetaDialogSource, /title="同步世界状态"/)
+  assert.match(chapterMetaDialogSource, /payload\.phase === 'applying'/)
+  assert.match(chapterMetaDialogSource, /世界状态同步完成/)
 })

@@ -143,6 +143,13 @@ const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
       emotionArc: stringField
     })
   }),
+  'chapter-session-note': z.object({
+    sessionNote: z.object({
+      craftDecisions: stringField,
+      effectiveReferences: stringField,
+      nextChapterAdvice: stringField
+    })
+  }),
   'chapter-scene-plan': z.object({
     scenes: z.array(z.object({
       focus: stringField

@@ -645,52 +645,56 @@ async function runPostGenerationPipeline(
 
   try {
     const db = await ensureWorkspaceDb()
-    const involvedCharIds = extractInvolvedCharacterIds(context)
-    const preState = buildStoryStateContext(db, projectId, involvedCharIds)
+    if (context.deferStoryStateUntilFinal === true) {
+      stateStatus = 'skipped'
+    } else {
+      const involvedCharIds = extractInvolvedCharacterIds(context)
+      const preState = buildStoryStateContext(db, projectId, involvedCharIds)
 
-    const deltaResult = await extractStateDeltaViaLLMWithDiagnostics(
-      settings,
-      chapterContent,
-      preState,
-      signal
-    )
-    signal.throwIfAborted()
-    if (deltaResult.issue) {
-      issues.push(deltaResult.issue)
-      stateStatus = 'warning'
-    }
+      const deltaResult = await extractStateDeltaViaLLMWithDiagnostics(
+        settings,
+        chapterContent,
+        preState,
+        signal
+      )
+      signal.throwIfAborted()
+      if (deltaResult.issue) {
+        issues.push(deltaResult.issue)
+        stateStatus = 'warning'
+      }
 
-    if (deltaResult.delta) {
-      const checkResult = runLightCheck(chapterContent, preState, deltaResult.delta)
-      if (!checkResult.passed) {
-        logResponse('LIGHT_CHECK', settings, 'chapter-first-draft',
-          checkResult.violations.map((v) => `[${v.severity}] ${v.message}`).join('\n'), 0, {})
-        if (chapterWarningsEmitter && chapterId) {
-          chapterWarningsEmitter({
-            projectId,
-            chapterId,
-            chapterIndex,
-            generatedAt,
-            violations: checkResult.violations
+      if (deltaResult.delta) {
+        const checkResult = runLightCheck(chapterContent, preState, deltaResult.delta)
+        if (!checkResult.passed) {
+          logResponse('LIGHT_CHECK', settings, 'chapter-first-draft',
+            checkResult.violations.map((v) => `[${v.severity}] ${v.message}`).join('\n'), 0, {})
+          if (chapterWarningsEmitter && chapterId) {
+            chapterWarningsEmitter({
+              projectId,
+              chapterId,
+              chapterIndex,
+              generatedAt,
+              violations: checkResult.violations
+            })
+          }
+        }
+
+        try {
+          applyStateDelta(db, projectId, chapterIndex, deltaResult.delta)
+          if (stateStatus === 'pending') stateStatus = 'done'
+        } catch (error) {
+          stateStatus = 'error'
+          logError('POST_GENERATION_APPLY_STATE', settings, 'chapter-first-draft', error, 0)
+          issues.push({
+            stage: 'pipeline',
+            severity: 'error',
+            message: '本章正文已生成，但世界状态写入失败，后续连续性检查可能暂时不准确。',
+            detail: buildIssueDetail(error)
           })
         }
+      } else if (stateStatus === 'pending') {
+        stateStatus = 'skipped'
       }
-
-      try {
-        applyStateDelta(db, projectId, chapterIndex, deltaResult.delta)
-        if (stateStatus === 'pending') stateStatus = 'done'
-      } catch (error) {
-        stateStatus = 'error'
-        logError('POST_GENERATION_APPLY_STATE', settings, 'chapter-first-draft', error, 0)
-        issues.push({
-          stage: 'pipeline',
-          severity: 'error',
-          message: '本章正文已生成，但世界状态写入失败，后续连续性检查可能暂时不准确。',
-          detail: buildIssueDetail(error)
-        })
-      }
-    } else if (stateStatus === 'pending') {
-      stateStatus = 'skipped'
     }
 
     if (chapterId) {
