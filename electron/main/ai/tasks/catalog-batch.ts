@@ -1,5 +1,5 @@
 import type { AiTaskResult, CatalogBatchResult } from '../shared-types'
-import { resolveWritingStyleInstruction } from '../prompts/shared'
+import { formatStoryStateConstraint, resolveWritingStyleInstruction } from '../prompts/shared'
 import { extractJsonObject, jsonStringField, type PromptBuildInput, type TaskHandler } from './base'
 import { normalizeWorldviewType } from './worldview-type'
 
@@ -53,7 +53,7 @@ const handler: TaskHandler = {
     const count = Math.max(1, Math.min(10, Number(context.count) || 1))
     const style = resolveWritingStyleInstruction(context)
     return {
-      system: `${capabilityPreamble.system}\n\n你是小说项目的批量结构化资料生成器。只返回 JSON 对象，不要 Markdown、解释或提问。必须返回格式 {"entries":[...]}。`,
+      system: `${capabilityPreamble.system}\n\n你是小说项目的批量结构化资料生成器。只返回 JSON 对象，不要 Markdown、解释或提问。必须返回格式 {"entries":[...]}。${formatStoryStateConstraint(context)}`,
       user: `${capabilityPreamble.user}\n\n生成模式：${mode}\n本批数量：${count}\n项目标题：${String(context.projectTitle ?? '')}\n项目题材：${String(context.projectGenre ?? '')}\n补充要求：${String(context.userPrompt ?? '') || '无'}\n指定类型：${JSON.stringify(context.requestedTypes ?? [])}\n主角色：${JSON.stringify(context.mainCharacter ?? null)}\n关系方向：${String(context.relationshipDirection ?? '')}\n待处理目标：${JSON.stringify(context.targets ?? [])}\n已有标题或名称（严格避重）：${JSON.stringify(context.existingNames ?? [])}\n相关世界观：${JSON.stringify(context.worldviewEntries ?? [])}\n相关角色：${JSON.stringify(context.characters ?? [])}\n相关组织：${JSON.stringify(context.organizations ?? [])}\n已有角色关系：${JSON.stringify(context.characterRelationships ?? [])}\n已有组织归属：${JSON.stringify(context.organizationMemberships ?? [])}\n相关大纲：${JSON.stringify(context.outlineItems ?? [])}\n\n本模式规则：${modeRules[mode]}\n通用要求：\n1. entries 必须恰好返回 ${count} 项，内容要彼此有区分度。\n2. 不得返回待补充、未定义、信息不足等占位内容。\n3. ${style}\n4. relationship 和 membership 模式必须严格按 targets 顺序返回，并保留 targetIndex。\n\n现在只返回 JSON。`
     }
   },

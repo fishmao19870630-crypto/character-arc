@@ -3,10 +3,22 @@ import { ensureWorkspaceDb } from '../../workspace-store'
 import { buildStoryStateContext, formatStoryStateForPrompt } from '../../story-state-store'
 import { retrieveHybridContext, formatSemanticSegmentsForPrompt } from '../knowledge-retrieval'
 
+const STORY_STATE_TASKS: ReadonlySet<string> = new Set([
+  'story-deep-audit',
+  'outline-item',
+  'outline-batch',
+  'outline-chain',
+  'outline-enhance',
+  'character-card',
+  'character-enhance',
+  'worldview-entry',
+  'worldview-enhance'
+])
+
 /**
  * 在任务执行前补全生成上下文：
  * - chapter-first-draft / chapter-assistant / chapter-analysis / chapter-scene-plan 注入故事状态块与语义片段
- * - story-deep-audit 注入故事状态块
+ * - 大纲、角色、世界观生成及 story-deep-audit 注入故事状态块
  *
  * 失败时静默跳过，不阻塞主流程。
  */
@@ -47,7 +59,11 @@ export async function enrichTaskContextForGeneration(
     return
   }
 
-  if (task.task !== 'story-deep-audit') {
+  const shouldInjectStoryState = STORY_STATE_TASKS.has(task.task) || (
+    task.task === 'catalog-batch' &&
+    (task.context.mode === 'character' || task.context.mode === 'worldview')
+  )
+  if (!shouldInjectStoryState) {
     return
   }
 
@@ -58,6 +74,8 @@ export async function enrichTaskContextForGeneration(
     const storyStateBlock = formatStoryStateForPrompt(storyState)
     if (storyStateBlock) {
       task.context.storyStateBlock = storyStateBlock
+    } else {
+      delete task.context.storyStateBlock
     }
   } catch {
     // 状态库查询失败不阻塞生成

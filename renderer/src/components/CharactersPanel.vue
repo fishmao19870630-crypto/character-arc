@@ -237,6 +237,7 @@ async function handleAiEnhance(): Promise<void> {
           task: 'character-enhance',
           settings: appStore.appSettings,
           context: {
+            projectId: appStore.currentProject?.id,
             currentForm: { name: form.name, role: form.role, description: form.description, tags: form.tags },
             projectTitle: appStore.currentProject?.title,
             projectGenre: appStore.currentProject?.genre,

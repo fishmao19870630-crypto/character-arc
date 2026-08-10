@@ -445,6 +445,7 @@ function buildAiEntityContext(volumeId?: string) {
   const organizationNameById = new Map(appStore.organizations.map((item) => [item.id, item.name]))
 
   return {
+    projectId: appStore.currentProject?.id,
     worldviewEntries: worldviewEntries.map((entry) => ({
       id: entry.id,
       type: entry.type,

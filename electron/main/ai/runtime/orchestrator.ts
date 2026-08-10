@@ -87,7 +87,9 @@ export async function runAiTask(
   // 白名单内的任务直接尝试走 agent loop，不预判 provider 能力。
   // 如果模型不支持 tool_use，运行时会抛错，在 catch 中降级或提示用户。
   const settingsForRouting = normalizeSettings(task.settings)
-  if (AGENT_TASK_WHITELIST.has(task.task)) {
+  const usesAgentRoute = AGENT_TASK_WHITELIST.has(task.task)
+  if (usesAgentRoute) {
+    await enrichTaskContextForGeneration(task, settingsForRouting)
     try {
       return await runAgentTask(task, knowledgeContext)
     } catch (error) {
@@ -109,7 +111,9 @@ export async function runAiTask(
 
   const { projectId, skills, usedSkillIds } = await resolveTaskSkills(task)
   logSelection(task.task, skills, knowledgeContext?.usedKnowledge ?? [])
-  await enrichTaskContextForGeneration(task, settings)
+  if (!usesAgentRoute) {
+    await enrichTaskContextForGeneration(task, settings)
+  }
 
   const input = buildPromptInput(task, skills, knowledgeContext)
   const prompt = handler.buildPrompt(input)

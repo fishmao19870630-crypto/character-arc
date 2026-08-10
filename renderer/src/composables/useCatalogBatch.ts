@@ -61,6 +61,7 @@ export function useCatalogBatch() {
           settings: appStore.appSettings,
           context: {
             ...batchContext,
+            projectId: appStore.currentProject?.id,
             mode: options.mode,
             count: batchCount,
             existingNames: [...knownKeys]
