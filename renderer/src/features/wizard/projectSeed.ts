@@ -11,6 +11,7 @@ import type {
   WorldviewEntry
 } from '@/types/app'
 import { createOutlineVolume } from '@/features/workspace/outlineVolumes'
+import { normalizeWorldviewType } from '@shared/worldview-type'
 
 export interface ProjectWizardValues {
   title: string
@@ -182,7 +183,7 @@ export function createProjectWorkspaceSeedFromSpiral(
   ]
   const worldviewEntries = allWorldview.map((item, index) => ({
     id: createSeedId('world', index, timestamp),
-    type: item.type?.trim() || '法则',
+    type: normalizeWorldviewType(item.type, '法则'),
     title: item.title?.trim() || `设定条目 ${index + 1}`,
     content: item.content?.trim() || '待补充设定内容。',
     sortOrder: index,

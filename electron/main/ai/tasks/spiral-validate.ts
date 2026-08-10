@@ -2,6 +2,7 @@ import type { TaskHandler, PromptBuildInput } from './base'
 import { extractJsonObject } from './base'
 import type { AiTaskResult } from '../shared-types'
 import type { SpiralValidateResult, SpiralSeedResult, SpiralExpandResult } from '../spiral/types'
+import { normalizeWorldviewType } from './worldview-type'
 
 /** 螺旋校验任务：检查角色弧线、情节因果链和世界设定之间的一致性 */
 const handler: TaskHandler = {
@@ -98,7 +99,7 @@ ${expandBlock}
           : [],
         worldviewAdditions: Array.isArray(patches.worldviewAdditions)
           ? patches.worldviewAdditions.map((r) => ({
-              type: String(r.type ?? '法则').trim(),
+              type: normalizeWorldviewType(r.type, '法则'),
               title: String(r.title ?? '').trim(),
               content: String(r.content ?? '').trim()
             }))
