@@ -685,6 +685,8 @@ declare global {
           Promise<{ turnId: string; finalText: string; status: string; error?: string }>
         turnCancel: (payload: import('@shared/assistant-runtime').TurnCancelRequest) =>
           Promise<{ ok: boolean; reason?: string }>
+        turnTruncate: (payload: import('@shared/assistant-runtime').TurnTruncateRequest) =>
+          Promise<import('@shared/assistant-runtime').TurnTruncateResult>
         stageList: (payload: {
           sessionId?: string
           status?: readonly string[]

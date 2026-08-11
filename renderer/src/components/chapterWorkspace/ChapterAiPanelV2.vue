@@ -12,6 +12,7 @@ import {
 } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
 import { type useAssistant } from '@/composables/useAssistant'
+import type { TurnTruncateResult } from '@shared/assistant-runtime'
 import AssistantSessionList from '@/components/assistantV2/AssistantSessionList.vue'
 import AssistantMessages from '@/components/assistantV2/AssistantMessages.vue'
 import AssistantComposer from '@/components/assistantV2/AssistantComposer.vue'
@@ -121,6 +122,28 @@ function sendWithMode(): void {
   void assistant.send({
     intentHint: `chapter-assistant-v2:${activeMode.value}${selectionHintSuffix}`
   })
+}
+
+function notifyTruncate(result: TurnTruncateResult, action: '撤回' | '重新分叉'): void {
+  if (result.keptCommitted > 0) {
+    message.warning(`${action}完成，但 ${result.keptCommitted} 项已写回项目的改动未回滚`)
+  } else if (result.discardedStaged > 0) {
+    message.success(`${action}完成，已丢弃 ${result.discardedStaged} 项暂存变更`)
+  } else {
+    message.success(`${action}完成`)
+  }
+}
+
+async function handleUndoTurn(turnId: string): Promise<void> {
+  const result = await assistant.undoTurn(turnId)
+  if (result) notifyTruncate(result, '撤回')
+}
+
+async function handleResendTurn(): Promise<void> {
+  const result = await assistant.resendEditedTurn({
+    intentHint: `chapter-assistant-v2:${activeMode.value}`
+  })
+  if (result) notifyTruncate(result, '重新分叉')
 }
 
 function createSession(): void {
@@ -293,8 +316,17 @@ defineExpose({ sendPrompt, sendPromptWithAction, triggerDraft })
         :is-streaming="assistant.isStreaming.value"
         :is-initializing="assistant.isInitializing.value"
         assistant-name="创作助理"
+        :editing-turn-id="assistant.editingTurnId.value"
+        :editing-draft="assistant.editingDraft.value"
+        :is-mutating="assistant.isTruncating.value"
+        :staged-changes="assistant.stagedChanges.value"
         @continue="assistant.continueWithPrompt"
         @open-staged="activeTab = 'staged'"
+        @edit-start="assistant.startEditingTurn"
+        @edit-cancel="assistant.cancelEditing"
+        @edit-draft="assistant.updateEditingDraft"
+        @resend="handleResendTurn"
+        @undo="handleUndoTurn"
       />
 
       <div v-else class="starter">
@@ -344,9 +376,13 @@ defineExpose({ sendPrompt, sendPromptWithAction, triggerDraft })
         :is-streaming="assistant.isStreaming.value"
         :is-canceling="assistant.isCanceling.value"
         :streaming-char-count="assistant.streamingCharCount.value"
+        :is-editing="Boolean(assistant.editingTurnId.value)"
+        :restored-label="assistant.restoredDraftLabel.value"
         :mode-label="hasSelection ? selectionHint : currentMode.label"
         @send="sendWithMode"
         @cancel="assistant.cancel()"
+        @edit-last="assistant.startEditingLastTurn()"
+        @clear-restored="assistant.clearRestoredDraft()"
       />
     </div>
 

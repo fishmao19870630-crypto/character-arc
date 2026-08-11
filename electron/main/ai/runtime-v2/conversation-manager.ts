@@ -226,6 +226,7 @@ function rowToEvent(row: EventRow): PersistedTurnEvent {
  * seq 号在内存维护 next 计数，首次访问某 turn 时懒加载 max(seq)+1。
  */
 export class ConversationManager {
+  private readonly db: DatabaseSync
   private readonly nextSeqByTurn = new Map<string, number>()
 
   // 预编译语句缓存
@@ -241,13 +242,17 @@ export class ConversationManager {
     updateTurnStatus: StatementSync
     getTurn: StatementSync
     listTurnsBySession: StatementSync
+    getTurnOrder: StatementSync
+    listTurnIdsFrom: StatementSync
+    deleteTurnsFrom: StatementSync
     insertEvent: StatementSync
     listEventsByTurn: StatementSync
     maxSeqByTurn: StatementSync
     upsertTurnState: StatementSync
   }
 
-  constructor(private readonly db: DatabaseSync) {
+  constructor(db: DatabaseSync) {
+    this.db = db
     this.stmts = {
       insertSession: db.prepare(
         `INSERT INTO assistant_sessions_v2
@@ -292,7 +297,20 @@ export class ConversationManager {
         `SELECT * FROM assistant_turns WHERE id = ?`
       ),
       listTurnsBySession: db.prepare(
-        `SELECT * FROM assistant_turns WHERE session_id = ? ORDER BY created_at ASC`
+        `SELECT * FROM assistant_turns WHERE session_id = ? ORDER BY rowid ASC`
+      ),
+      getTurnOrder: db.prepare(
+        `SELECT rowid AS row_no, user_message
+         FROM assistant_turns
+         WHERE id = ? AND session_id = ?`
+      ),
+      listTurnIdsFrom: db.prepare(
+        `SELECT id FROM assistant_turns
+         WHERE session_id = ? AND rowid >= ?
+         ORDER BY rowid ASC`
+      ),
+      deleteTurnsFrom: db.prepare(
+        `DELETE FROM assistant_turns WHERE session_id = ? AND rowid >= ?`
       ),
       insertEvent: db.prepare(
         `INSERT INTO assistant_events
@@ -435,6 +453,37 @@ export class ConversationManager {
   listTurns(sessionId: string): AssistantTurn[] {
     const rows = this.stmts.listTurnsBySession.all(sessionId) as unknown as TurnRow[]
     return rows.map(rowToTurn)
+  }
+
+  /** 删除指定轮次及其后的全部轮次。事件、暂存变更和运行状态由外键级联清理。 */
+  truncateFrom(sessionId: string, fromTurnId: string): {
+    removedTurnIds: string[]
+    restoredUserMessage: string
+  } {
+    const anchor = this.stmts.getTurnOrder.get(fromTurnId, sessionId) as
+      | { row_no: number; user_message: string }
+      | undefined
+    if (!anchor) throw new Error('找不到要撤回的对话轮次。')
+
+    const rows = this.stmts.listTurnIdsFrom.all(sessionId, anchor.row_no) as unknown as Array<{ id: string }>
+    const removedTurnIds = rows.map((row) => row.id)
+    if (removedTurnIds.length === 0) throw new Error('没有可撤回的对话轮次。')
+
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.stmts.deleteTurnsFrom.run(sessionId, anchor.row_no)
+      this.touchSession(sessionId)
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+
+    for (const turnId of removedTurnIds) this.nextSeqByTurn.delete(turnId)
+    return {
+      removedTurnIds,
+      restoredUserMessage: anchor.user_message
+    }
   }
 
   // -------- Events --------
