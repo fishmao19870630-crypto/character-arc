@@ -42,7 +42,7 @@ const visibleAiRunLogs = computed(() =>
     const readStats = toolReadStats(run)
     return {
       run,
-      taskLabel: formatTaskLabel(run.task),
+      taskLabel: formatTaskLabel(run.task, run.clientKey),
       projectTitle: projectTitleFor(run),
       chapterTitle: chapterTitleFor(run),
       startedAt: formatTime(run.startedAt),
@@ -62,7 +62,8 @@ const projectTitleById = computed(() => {
   return map
 })
 function projectTitleFor(run: AiRunRecord): string {
-  return projectTitleById.value.get(run.projectId) || '未知项目'
+  if (!run.projectId) return ''
+  return projectTitleById.value.get(run.projectId) || '待创建或已删除项目'
 }
 
 const statusMeta: Record<AiRunRecord['status'], { label: string; type: 'default' | 'info' | 'success' | 'error' | 'warning' }> = {
@@ -104,11 +105,24 @@ const taskLabelMap: Record<string, string> = {
   'style-fingerprint-extract': '风格指纹提取',
   'workflow-documents': '设定导出',
   'plot-thread-detect': '伏笔检测',
+  'premise-enhance': '小说简介优化',
   'project-bootstrap': '项目初始化',
-  'spiral-seed': '旋种生成',
-  'spiral-expand': '旋种扩写',
-  'spiral-validate': '旋种验证',
+  'spiral-seed': '项目核心设计',
+  'spiral-expand': '角色关系与大纲扩展',
+  'spiral-characters': '深度构建配角',
+  'spiral-organizations': '深度构建组织',
+  'spiral-relationships': '深度构建关系',
+  'spiral-worldview-expand': '深度补充世界观',
+  'spiral-outline': '深度构建大纲',
+  'spiral-validate': '项目一致性校验',
   'inspiration-pack': '灵感整理',
+  'catalog-batch': '图鉴批量生成',
+  'catalog-batch:character': '角色批量生成',
+  'catalog-batch:organization': '组织批量生成',
+  'catalog-batch:relationship': '人物关系批量生成',
+  'catalog-batch:membership': '组织成员批量生成',
+  'catalog-batch:worldview': '世界观批量生成',
+  'catalog-batch:inspiration': '灵感批量生成',
   'cover-generate': '封面生成'
 }
 
@@ -127,8 +141,8 @@ async function handleFetchModels(): Promise<void> {
   }
 }
 
-function formatTaskLabel(task: string): string {
-  return taskLabelMap[task] || task
+function formatTaskLabel(task: string, clientKey?: string): string {
+  return (clientKey && taskLabelMap[clientKey]) || taskLabelMap[task] || task
 }
 
 function formatTime(value?: string): string {
@@ -266,7 +280,7 @@ function loadMoreAiRunLogs(): void {
   >
     <div class="ai-log-modal__summary">
       <strong>AI 调用日志</strong>
-      <span>全部项目 · {{ aiRunLogs.length }} 条记录</span>
+      <span>全部调用 · {{ aiRunLogs.length }} 条记录</span>
     </div>
 
     <div v-if="!aiRunLogs.length" class="ai-log-empty">
@@ -294,7 +308,7 @@ function loadMoreAiRunLogs(): void {
         </div>
 
         <div class="ai-log-card__meta">
-          <span>项目：{{ item.projectTitle }}</span>
+          <span v-if="item.projectTitle">关联项目：{{ item.projectTitle }}</span>
           <span>开始：{{ item.startedAt }}</span>
           <span>耗时：{{ item.duration }}</span>
           <span>{{ item.tokenUsage }}</span>

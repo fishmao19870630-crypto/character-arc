@@ -42,6 +42,7 @@ export interface StoredState {
   workspaces: Record<string, ProjectWorkspaceData>
   knowledgeDocuments: KnowledgeDocument[]
   referenceWorks: ReferenceWorkItem[]
+  aiRuns: AiRunRecord[]
   appSettings: AppSettings
   coverWorkbenchHistory: import('@/types/app').CoverWorkbenchHistoryItem[]
 }
@@ -230,9 +231,10 @@ export function normalizeReferenceWorks(works?: ReferenceWorkItem[] | null): Ref
 // 默认应用设置：5分钟自动保存，API 信息由用户在设置中填写
 export const defaultAppSettings: AppSettings = {
   provider: 'deepseek',
-  model: 'deepseek-chat',
+  model: '',
   apiKey: '',
   baseUrl: 'https://api.deepseek.com/v1',
+  apiProtocol: 'auto',
   proxyUrl: '',
   aiProfiles: [],
   activeAiProfileId: '',
@@ -274,7 +276,7 @@ function normalizeKnowledgeDocuments(documents?: KnowledgeDocument[] | null): Kn
     : []
 }
 
-function normalizeAiRuns(aiRuns?: AiRunRecord[] | null): AiRunRecord[] {
+export function normalizeAiRuns(aiRuns?: AiRunRecord[] | null): AiRunRecord[] {
   return Array.isArray(aiRuns)
     ? aiRuns.map((run) => ({
         ...run,
@@ -338,6 +340,12 @@ function normalizeAiProfile(profile: AiProfile): AiProfile {
     baseUrl: String(profile.baseUrl ?? '').trim(),
     apiKey: String(profile.apiKey ?? '').trim(),
     model: String(profile.model ?? '').trim(),
+    apiProtocol:
+      profile.apiProtocol === 'openai-responses'
+      || profile.apiProtocol === 'openai-chat'
+      || profile.apiProtocol === 'anthropic'
+        ? profile.apiProtocol
+        : 'auto',
     temperature: normalizeOptionalNumber(profile.temperature, 0, 2),
     topP: normalizeOptionalNumber(profile.topP, 0, 1)
   }
@@ -349,6 +357,12 @@ export function normalizeAppSettings(settings?: Partial<AppSettings> | null): Ap
   const model = sanitizeSettingString(source.model, defaultAppSettings.model)
   const apiKey = sanitizeSettingString(source.apiKey, defaultAppSettings.apiKey)
   const baseUrl = sanitizeSettingString(source.baseUrl, defaultAppSettings.baseUrl)
+  const apiProtocol =
+    source.apiProtocol === 'openai-responses'
+    || source.apiProtocol === 'openai-chat'
+    || source.apiProtocol === 'anthropic'
+      ? source.apiProtocol
+      : 'auto'
   const temperature = normalizeOptionalNumber(source.temperature, 0, 2)
   const topP = normalizeOptionalNumber(source.topP, 0, 1)
 
@@ -359,7 +373,7 @@ export function normalizeAppSettings(settings?: Partial<AppSettings> | null): Ap
 
   if (aiProfiles.length === 0 && (apiKey || model !== defaultAppSettings.model)) {
     const migratedId = `profile-${Date.now()}`
-    aiProfiles = [{ id: migratedId, name: provider || 'Default', provider, baseUrl, apiKey, model, temperature, topP }]
+    aiProfiles = [{ id: migratedId, name: provider || 'Default', provider, baseUrl, apiKey, model, apiProtocol, temperature, topP }]
     activeAiProfileId = migratedId
   }
 
@@ -372,6 +386,7 @@ export function normalizeAppSettings(settings?: Partial<AppSettings> | null): Ap
     model,
     apiKey,
     baseUrl,
+    apiProtocol,
     proxyUrl: sanitizeSettingString(source.proxyUrl, defaultAppSettings.proxyUrl),
     temperature,
     topP,
@@ -405,6 +420,7 @@ export function loadStoredState(): StoredState {
     workspaces: {},
     knowledgeDocuments: [],
     referenceWorks: [],
+    aiRuns: [],
     appSettings: defaultAppSettings,
     coverWorkbenchHistory: []
   }

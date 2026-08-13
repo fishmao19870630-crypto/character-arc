@@ -6,6 +6,15 @@ import { resolveWritingStyleInstruction } from '../prompts/shared'
 import { normalizeWorldviewType } from './worldview-type'
 import { resolveProjectBootstrapPromptParts } from '../prompts/bootstrap-strategies'
 
+function normalizeTags(value: unknown, role = ''): string[] {
+  if (!Array.isArray(value)) return []
+  const normalizedRole = role.trim()
+  return [...new Set(value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter((item) => item && item !== normalizedRole))].slice(0, 5)
+}
+
 /** 螺旋播种任务：从故事前提提炼主角核心矛盾、主线方向和最小世界规则 */
 const handler: TaskHandler = {
   name: 'spiral-seed',
@@ -28,7 +37,7 @@ const handler: TaskHandler = {
 ${strategyBlock}
 
 要求：
-1. protagonist：设计主角，包含 name（姓名）、coreDesire（核心欲望——他最想要什么）、coreFlaw（核心缺陷——什么性格弱点会阻碍他）、innerConflict（内在矛盾——欲望和缺陷如何互相撕扯）
+1. protagonist：设计主角，包含 name（姓名）、tags（3-5个简短标签，覆盖身份、性格、能力或主题特征，不得用“主角”等角色定位充当标签）、coreDesire（核心欲望——他最想要什么）、coreFlaw（核心缺陷——什么性格弱点会阻碍他）、innerConflict（内在矛盾——欲望和缺陷如何互相撕扯）
 2. mainArc：故事主线，包含 premise（一句话核心前提）、centralQuestion（故事要回答的核心问题）、endingDirection（结局走向，不需要具体结局，只需方向感）
 3. worldRules：2-3条最小世界规则，每条包含 type（地理/法则/物种/势力/历史）、title、content
 4. 主角的核心欲望必须能驱动整个故事前进
@@ -36,7 +45,7 @@ ${strategyBlock}
 6. 世界规则只保留直接服务于主角矛盾和主线冲突的设定，不做泛泛扩展
 7. ${writingStyle}
 
-返回格式：{"protagonist":{"name":"","coreDesire":"","coreFlaw":"","innerConflict":""},"mainArc":{"premise":"","centralQuestion":"","endingDirection":""},"worldRules":[{"type":"","title":"","content":""}]}`
+返回格式：{"protagonist":{"name":"","tags":[""],"coreDesire":"","coreFlaw":"","innerConflict":""},"mainArc":{"premise":"","centralQuestion":"","endingDirection":""},"worldRules":[{"type":"","title":"","content":""}]}`
     }
   },
   normalize(raw: string): AiTaskResult {
@@ -53,6 +62,7 @@ ${strategyBlock}
     return {
       protagonist: {
         name: protagonist.name?.trim() || '主角',
+        tags: normalizeTags(protagonist.tags, '主角'),
         coreDesire: protagonist.coreDesire?.trim() || '待设定',
         coreFlaw: protagonist.coreFlaw?.trim() || '待设定',
         innerConflict: protagonist.innerConflict?.trim() || '待设定'

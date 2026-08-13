@@ -53,12 +53,12 @@ const GENRE_STRATEGIES: Record<string, BootstrapStrategy> = {
 /** 短篇/长篇在大纲、世界观和节奏上的差异化要求 */
 const LENGTH_ADJUSTMENTS: Record<NovelLength, { outline: string; world: string; pacing: string }> = {
   long: {
-    outline: '三条大纲可偏向长线铺垫：先立局、再升级、最后抛出更大的局势或人物关系钩子。',
+    outline: '首批章节大纲可生成 3 到 5 条，偏向长线铺垫：先立局、再升级、最后抛出更大的局势或人物关系钩子。',
     world: '世界观允许保留一条更偏长期伏笔的设定，为后续扩展留口。',
     pacing: '节奏可以舒展，但每条都必须给读者明确的新信息或新压力。'
   },
   short: {
-    outline: '三条大纲必须更聚焦单线冲突，尽快推进到核心矛盾，不做宽散铺陈。',
+    outline: '首批章节大纲生成 3 到 5 条，必须更聚焦单线冲突，尽快推进到核心矛盾，不做宽散铺陈。',
     world: '世界观只保留最关键、最直接影响故事的设定。',
     pacing: '节奏更紧，尽量让每条大纲都带来明确事件推动或情绪拐点。'
   }

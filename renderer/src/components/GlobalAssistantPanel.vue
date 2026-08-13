@@ -84,6 +84,7 @@ const {
   resolveWorldviewTarget,
   resolveCharacterTarget,
   resolveOutlineTarget,
+  formatOutlineReferenceSummary,
   hasWorldviewApplyTarget,
   hasCharacterApplyTarget,
   hasOutlineApplyTarget,
@@ -558,6 +559,7 @@ watch(
                     <p>{{ item.summary }}</p>
                     <ul class="global-proposal__changes">
                       <li v-if="item.conflict">冲突：{{ item.conflict }}</li>
+                      <li v-if="formatOutlineReferenceSummary(item)">{{ formatOutlineReferenceSummary(item) }}</li>
                     </ul>
                   </div>
                   <div
@@ -585,6 +587,7 @@ watch(
                       <li v-if="item.wordTarget">目标字数：{{ item.wordTarget }}</li>
                       <li v-if="item.conflict">冲突：{{ item.conflict }}</li>
                       <li v-if="item.summary">摘要：{{ item.summary }}</li>
+                      <li v-if="formatOutlineReferenceSummary(item)">{{ formatOutlineReferenceSummary(item) }}</li>
                     </ul>
                   </div>
                 </div>

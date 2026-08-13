@@ -1,6 +1,6 @@
 import { computed, reactive, ref } from 'vue'
 import type { Ref } from 'vue'
-import { buildChapterAssistantContext } from '@/features/ai/chapterAssistantContext'
+import { buildChapterAssistantContext, buildOutlineItemContext } from '@/features/ai/chapterAssistantContext'
 import { useAppStore } from '@/stores/app'
 import { toIpcPayload } from '@/utils/ipcPayload'
 import type { ChapterEditProposal, ChapterInsertionMode } from '@/types/app'
@@ -819,7 +819,6 @@ export function useChapterAi(): {
           label: 'AI 章节助手',
           description: '与创作助理对话',
           panel: 'chapters',
-          timeoutMs: 0
         },
         async () => {
           const currentChapterIndex = appStore.chapters.findIndex((item) => item.id === chapter.id)
@@ -835,6 +834,10 @@ export function useChapterAi(): {
           const volumeChapterSummaries = precedingChapters
             .filter((c) => c.volumeId === chapter.volumeId && !relatedTitles.has(c.title))
             .map((c) => ({ title: c.title, summary: c.summary }))
+          const volumeOutlineItems = appStore.outlineItems.filter((item) => item.volumeId === chapter.volumeId)
+          const currentOutlineItem = chapter.outlineItemId
+            ? volumeOutlineItems.find((item) => item.id === chapter.outlineItemId)
+            : volumeOutlineItems.find((item) => item.title.trim() === chapter.title.trim())
           const firstChapter = appStore.chapters[0]
           const novelOpenerSummary =
             firstChapter && firstChapter.id !== chapter.id && !relatedTitles.has(firstChapter.title)
@@ -850,6 +853,11 @@ export function useChapterAi(): {
             relatedChapters,
             volumeChapterSummaries,
             novelOpenerSummary,
+            currentOutlineItem: buildOutlineItemContext(currentOutlineItem, {
+              characters: appStore.characters,
+              organizations: appStore.organizations,
+              worldviewEntries: appStore.worldviewEntries
+            }),
             recentMessages: messages.value
               .slice(-8, -2)
               .map((item) => ({ role: item.role, content: item.content })),

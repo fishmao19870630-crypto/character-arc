@@ -491,6 +491,12 @@ export interface OutlineItem {
   conflict: string
   /** 剧情推进摘要 */
   summary: string
+  /** 相关角色 ID 列表 */
+  relatedCharacterIds?: string[]
+  /** 相关组织 ID 列表 */
+  relatedOrganizationIds?: string[]
+  /** 相关世界观设定 ID 列表 */
+  relatedWorldviewIds?: string[]
   /** 节点推进状态：点子 / 已规划 / 写作中 / 已完成 */
   status: OutlineItemStatus
   /** 排序权重 */
@@ -527,6 +533,9 @@ export interface OutlineImportPlanEntry {
     wordTarget?: string
     conflict?: string
     summary?: string
+    relatedCharacterIds?: string[]
+    relatedOrganizationIds?: string[]
+    relatedWorldviewIds?: string[]
     status?: OutlineItemStatus
   }
 }
@@ -650,7 +659,7 @@ export interface AiRunUsage {
 export interface AiRunRecord {
   /** 运行记录唯一标识 */
   id: string
-  /** 所属项目 ID */
+  /** 可选关联项目 ID；空字符串表示全局调用，不影响日志记录与生命周期 */
   projectId: string
   /** 关联章节 ID */
   chapterId?: string
@@ -865,6 +874,7 @@ export interface AiProfile {
   baseUrl: string
   apiKey: string
   model: string
+  apiProtocol?: 'auto' | 'openai-responses' | 'openai-chat' | 'anthropic'
   temperature?: number
   topP?: number
 }
@@ -880,6 +890,8 @@ export interface AppSettings {
   apiKey: string
   /** API 基础地址 */
   baseUrl: string
+  /** API 线协议；auto 时按供应商和模型目录解析 */
+  apiProtocol?: 'auto' | 'openai-responses' | 'openai-chat' | 'anthropic'
   /** AI 网络请求使用的 HTTP/HTTPS 代理地址 */
   proxyUrl: string
   /** 可选：模型采样温度，留空时使用服务端默认值 */
@@ -908,7 +920,7 @@ export interface AppSettings {
   darkMode: boolean
   /** 深色模式风格预设 */
   darkModeStyle: DarkModeStyle
-  /** AI 请求超时时间（秒），超时后主动终止本次请求 */
+  /** 旧数据兼容字段；AI 请求不再按时长自动取消。 */
   aiTimeoutSeconds: number
 }
 
@@ -995,6 +1007,9 @@ export interface GlobalAssistantProposal {
     wordTarget: string
     conflict: string
     summary: string
+    relatedCharacterIds?: string[]
+    relatedOrganizationIds?: string[]
+    relatedWorldviewIds?: string[]
   }>
   outlineUpdates: Array<{
     matchTitle: string
@@ -1004,6 +1019,9 @@ export interface GlobalAssistantProposal {
     conflict?: string
     summary?: string
     volumeId?: string
+    relatedCharacterIds?: string[]
+    relatedOrganizationIds?: string[]
+    relatedWorldviewIds?: string[]
   }>
   notes: string[]
 }

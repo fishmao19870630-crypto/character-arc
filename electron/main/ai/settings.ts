@@ -1,70 +1,23 @@
 import type { AiTaskName, AiTaskPayload, AppSettings, ProviderName } from './shared-types'
+import {
+  getAiProviderCatalogEntry,
+  normalizeAiProtocolPreference,
+  normalizeAiBaseUrl,
+  normalizeAiProviderName
+} from '@shared/ai-provider-catalog'
 
 /**
- * 根据供应商名称返回其默认 Base URL 和推荐模型。
+ * 根据供应商名称返回其默认 Base URL 和默认模型（当前保持为空）。
  * 用于用户未手动填写时的兜底值。
  *
  * @param provider - 供应商标识（如 'openai'、'deepseek'）
  * @returns 默认的 baseUrl 和 model
  */
 export function resolveProviderDefaults(provider: ProviderName): { baseUrl: string; model: string } {
-  switch (provider) {
-    case 'anthropic':
-      return { baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-4-6' }
-    case 'zhipu':
-      return { baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-5.1' }
-    case 'openai-compatible':
-    case 'openai':
-    case 'deepseek':
-    case 'qwen':
-    case 'moonshot':
-    case 'siliconflow':
-    case 'ollama':
-    case 'new-api':
-    case 'one-api':
-    default:
-      return { baseUrl: '', model: '' }
-  }
-}
-
-function stripKnownEndpointSuffix(baseUrl: string): string {
-  const knownEndpointSuffixes = [
-    '/chat/completions',
-    '/responses',
-    '/embeddings',
-    '/models',
-    '/images/generations'
-  ]
-
-  for (const suffix of knownEndpointSuffixes) {
-    if (baseUrl.endsWith(suffix)) {
-      return baseUrl.slice(0, -suffix.length)
-    }
-  }
-
-  return baseUrl
-}
-
-function isZhipuBaseUrl(provider: string, baseUrl: string): boolean {
-  if (provider === 'zhipu') return true
-  return /(^|\.)open\.bigmodel\.cn(\/|$)/i.test(baseUrl)
-}
-
-function normalizeBaseUrl(provider: string, rawBaseUrl: string): string {
-  let baseUrl = stripKnownEndpointSuffix(rawBaseUrl.trim().replace(/\/+$/, ''))
-  if (!baseUrl) return ''
-
-  if (isZhipuBaseUrl(provider, baseUrl)) {
-    baseUrl = baseUrl.replace(/\/v1$/i, '')
-    return baseUrl
-  }
-
-  // 如果 URL 已包含版本段（如 /v1、/v2、/v3），不再追加 /v1
-  if (!/\/v\d+$/i.test(baseUrl)) {
-    baseUrl = `${baseUrl}/v1`
-  }
-
-  return baseUrl
+  const preset = getAiProviderCatalogEntry(provider)
+  return preset
+    ? { baseUrl: preset.baseUrl, model: preset.model }
+    : { baseUrl: '', model: '' }
 }
 
 function normalizeOptionalNumber(value: unknown, min: number, max: number): number | undefined {
@@ -79,14 +32,16 @@ function normalizeOptionalNumber(value: unknown, min: number, max: number): numb
  * @returns 规范化后的 AppSettings
  */
 export function normalizeSettings(settings: AppSettings): AppSettings {
-  const provider = settings.provider?.trim().toLowerCase() || 'openai-compatible'
+  const requestedProvider = settings.provider?.trim().toLowerCase() || 'openai-compatible'
+  const provider = normalizeAiProviderName(requestedProvider, settings.baseUrl || '')
   const defaults = resolveProviderDefaults(provider)
-  const baseUrl = normalizeBaseUrl(provider, settings.baseUrl?.trim() || defaults.baseUrl)
+  const baseUrl = normalizeAiBaseUrl(provider, settings.baseUrl?.trim() || defaults.baseUrl)
   return {
     provider,
     model: settings.model?.trim() || defaults.model,
     apiKey: settings.apiKey?.trim() || '',
     baseUrl,
+    apiProtocol: normalizeAiProtocolPreference(settings.apiProtocol),
     proxyUrl: settings.proxyUrl?.trim() || '',
     temperature: normalizeOptionalNumber(settings.temperature, 0, 2),
     topP: normalizeOptionalNumber(settings.topP, 0, 1),
@@ -161,7 +116,7 @@ export function resolveMaxTokens(task?: AiTaskPayload): number | undefined {
     case 'chapter-scene-plan':
       return 400
     case 'chapter-first-draft':
-      return undefined
+      return resolveChapterDraftMaxTokens(task)
     case 'global-assistant':
       return 1400
     case 'global-assistant-proposal':
@@ -182,6 +137,16 @@ export function resolveMaxTokens(task?: AiTaskPayload): number | undefined {
     default:
       return undefined
   }
+}
+
+/**
+ * OpenCode 免费推理模型对不设上限的长文本请求可能长时间只输出 reasoning，
+ * 在正文开始前撞上网关连接时限。这里按目标字数预留正文和简短推理预算。
+ */
+export function resolveChapterDraftMaxTokens(task: AiTaskPayload): number {
+  const targetWordCount = Number(task.context.targetWordCount ?? task.context.chapterWordTarget)
+  if (!Number.isFinite(targetWordCount) || targetWordCount <= 0) return 16_000
+  return Math.min(32_000, Math.max(16_000, Math.ceil(targetWordCount * 4)))
 }
 
 /**

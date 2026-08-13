@@ -22,6 +22,41 @@ type ChapterAssistantMessage = {
   content: string
 }
 
+export type ChapterOutlineItemContext = {
+  id?: string
+  title: string
+  wordTarget: string
+  conflict: string
+  summary: string
+  relatedCharacterIds?: string[]
+  relatedCharacterNames?: string[]
+  relatedOrganizationIds?: string[]
+  relatedOrganizationNames?: string[]
+  relatedWorldviewIds?: string[]
+  relatedWorldviewTitles?: string[]
+}
+
+type OutlineItemContextSource = Pick<
+  OutlineItem,
+  'id' | 'title' | 'wordTarget' | 'conflict' | 'summary' | 'relatedCharacterIds' | 'relatedOrganizationIds' | 'relatedWorldviewIds'
+> | ChapterOutlineItemContext
+
+export type ChapterReferencePreview = {
+  currentOutlineItem: ChapterOutlineItemContext | null
+  characters: Array<{ id: string; name: string; role: string }>
+  organizations: Array<{ id: string; name: string; type: string }>
+  worldviewEntries: Array<{ id: string; title: string; type: string }>
+  characterRelationships: Array<{ id: string; label: string }>
+  organizationMemberships: Array<{ id: string; label: string }>
+  counts: {
+    characters: number
+    organizations: number
+    worldviewEntries: number
+    characterRelationships: number
+    organizationMemberships: number
+  }
+}
+
 // 构建章节助理上下文所需的全部输入数据
 type ChapterAssistantContextInput = {
   project?: ProjectSummary                              // 当前项目信息
@@ -47,7 +82,7 @@ type ChapterAssistantContextInput = {
   characterRelationships: CharacterRelationship[]       // 角色关系列表
   organizationMemberships: OrganizationMembership[]     // 组织成员关系列表
   inspirationEntries: InspirationEntry[]                // 灵感条目列表
-  currentOutlineItem?: OutlineItem | null               // 当前章节绑定的大纲节点
+  currentOutlineItem?: ChapterOutlineItemContext | null // 当前章节绑定的大纲节点
   outlineChapterSplit?: {                               // 同一大纲拆成多章时的章节位置
     currentPart: number
     totalParts: number
@@ -79,6 +114,7 @@ type ChapterAssistantContextInput = {
 export type ChapterFirstDraftContextInput = {
   project?: ProjectSummary
   chapter?: ChapterDraft
+  chapterIndex: number
   chapterVolume?: OutlineVolume
   relatedChapters: Array<{
     title: string
@@ -99,7 +135,7 @@ export type ChapterFirstDraftContextInput = {
   characterRelationships: CharacterRelationship[]
   organizationMemberships: OrganizationMembership[]
   inspirationEntries: InspirationEntry[]
-  currentOutlineItem?: OutlineItem | null               // 当前章节绑定的大纲节点
+  currentOutlineItem?: ChapterOutlineItemContext | null // 当前章节绑定的大纲节点
   outlineChapterSplit?: {                               // 同一大纲拆成多章时的章节位置
     currentPart: number
     totalParts: number
@@ -140,12 +176,267 @@ export type ChapterFirstDraftContextInput = {
   referenceStyleContext?: string
 }
 
+const CONTEXT_CHARACTER_LIMIT = 8
+const CONTEXT_WORLDVIEW_LIMIT = 8
+const CONTEXT_ORGANIZATION_LIMIT = 6
+const CONTEXT_RELATION_LIMIT = 8
+const CONTEXT_MEMBERSHIP_LIMIT = 8
+
+function normalizeContextText(value: unknown, maxLength = 12000): string {
+  return String(value ?? '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLength)
+    .toLocaleLowerCase()
+}
+
+function countOccurrences(source: string, phrase: string): number {
+  const value = phrase.trim().toLocaleLowerCase()
+  if (value.length < 2) return 0
+  let count = 0
+  let start = 0
+  while (start < source.length) {
+    const index = source.indexOf(value, start)
+    if (index < 0) break
+    count += 1
+    start = index + value.length
+  }
+  return count
+}
+
+function rankContextEntries<T>(
+  items: T[],
+  fields: (item: T) => string[],
+  limit: number,
+  queryText: string,
+  priorityIds: Set<string> = new Set(),
+  getId?: (item: T) => string,
+  includeUnmatched = true
+): T[] {
+  const query = normalizeContextText(queryText)
+  return items
+    .map((item, index) => {
+      const values = fields(item).map((value) => normalizeContextText(value, 500)).filter(Boolean)
+      const score = values.reduce((total, value, fieldIndex) => {
+        const occurrences = countOccurrences(query, value)
+        return total + occurrences * (fieldIndex === 0 ? 12 : 2)
+      }, 0)
+      const id = getId ? getId(item) : ''
+      const priority = id && priorityIds.has(id) ? 1000 : 0
+      return { item, index, score: score + priority }
+    })
+    .filter(({ score }) => includeUnmatched || score > 0)
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, limit)
+    .map(({ item }) => item)
+}
+
+export function buildOutlineItemContext(
+  source?: OutlineItemContextSource | null,
+  lookups?: {
+    characters?: CharacterCard[]
+    organizations?: OrganizationEntry[]
+    worldviewEntries?: WorldviewEntry[]
+  }
+): ChapterOutlineItemContext | null {
+  if (!source) return null
+  const id = String(source.id ?? '').trim()
+  const title = String(source.title ?? '').trim()
+  const wordTarget = String(source.wordTarget ?? '').trim()
+  const conflict = String(source.conflict ?? '').trim()
+  const summary = String(source.summary ?? '').trim()
+  const relatedCharacterIds = Array.isArray(source.relatedCharacterIds) ? [...new Set(source.relatedCharacterIds.map((id) => String(id).trim()).filter(Boolean))] : []
+  const relatedOrganizationIds = Array.isArray(source.relatedOrganizationIds) ? [...new Set(source.relatedOrganizationIds.map((id) => String(id).trim()).filter(Boolean))] : []
+  const relatedWorldviewIds = Array.isArray(source.relatedWorldviewIds) ? [...new Set(source.relatedWorldviewIds.map((id) => String(id).trim()).filter(Boolean))] : []
+  const characterNameById = new Map((lookups?.characters ?? []).map((character) => [character.id, character.name]))
+  const organizationNameById = new Map((lookups?.organizations ?? []).map((organization) => [organization.id, organization.name]))
+  const worldviewTitleById = new Map((lookups?.worldviewEntries ?? []).map((entry) => [entry.id, entry.title]))
+  const relatedCharacterNames = relatedCharacterIds.map((id) => characterNameById.get(id) ?? id).filter(Boolean)
+  const relatedOrganizationNames = relatedOrganizationIds.map((id) => organizationNameById.get(id) ?? id).filter(Boolean)
+  const relatedWorldviewTitles = relatedWorldviewIds.map((id) => worldviewTitleById.get(id) ?? id).filter(Boolean)
+  if (!title && !summary && !conflict) return null
+  return {
+    ...(id ? { id } : {}),
+    title,
+    wordTarget,
+    conflict,
+    summary,
+    ...(relatedCharacterIds.length ? { relatedCharacterIds } : {}),
+    ...(relatedCharacterNames.length ? { relatedCharacterNames } : {}),
+    ...(relatedOrganizationIds.length ? { relatedOrganizationIds } : {}),
+    ...(relatedOrganizationNames.length ? { relatedOrganizationNames } : {}),
+    ...(relatedWorldviewIds.length ? { relatedWorldviewIds } : {}),
+    ...(relatedWorldviewTitles.length ? { relatedWorldviewTitles } : {})
+  }
+}
+
+function selectRelevantReferenceData(input: {
+  chapter?: ChapterDraft
+  chapterContent: string
+  currentOutlineItem?: ChapterOutlineItemContext | null
+  relatedChapters: Array<{ title: string; summary: string; preview?: string }>
+  selectedText?: string
+  userPrompt: string
+  worldviewEntries: WorldviewEntry[]
+  characters: CharacterCard[]
+  organizations: OrganizationEntry[]
+  characterRelationships: CharacterRelationship[]
+  organizationMemberships: OrganizationMembership[]
+}) {
+  const outline = input.currentOutlineItem
+  const contextQuery = [
+    input.chapter?.title,
+    input.chapter?.summary,
+    input.chapterContent,
+    input.selectedText,
+    input.userPrompt,
+    outline?.title,
+    outline?.conflict,
+    outline?.summary,
+    ...input.relatedChapters.flatMap((chapter) => [chapter.title, chapter.summary, chapter.preview])
+  ].filter(Boolean).join('\n')
+
+  const preferredCharacterIds = new Set(outline?.relatedCharacterIds ?? [])
+  const preferredOrganizationIds = new Set(outline?.relatedOrganizationIds ?? [])
+  const preferredWorldviewIds = new Set(outline?.relatedWorldviewIds ?? [])
+
+  const characters = rankContextEntries(
+    input.characters,
+    (character) => [character.name, character.role, character.description, character.tags.map((tag) => tag.label).join(' ')],
+    CONTEXT_CHARACTER_LIMIT,
+    contextQuery,
+    preferredCharacterIds,
+    (character) => character.id
+  )
+  const characterIds = new Set(characters.map((character) => character.id))
+  // Keep the other endpoint of a directly relevant relationship when it is just outside the first ranking.
+  for (const relationship of input.characterRelationships) {
+    if (!characterIds.has(relationship.fromCharacterId) && !characterIds.has(relationship.toCharacterId)) continue
+    const counterpartId = characterIds.has(relationship.fromCharacterId)
+      ? relationship.toCharacterId
+      : relationship.fromCharacterId
+    const counterpart = input.characters.find((character) => character.id === counterpartId)
+    if (counterpart && !characterIds.has(counterpart.id)) {
+      if (characters.length >= CONTEXT_CHARACTER_LIMIT) {
+        const removed = characters.pop()
+        if (removed) characterIds.delete(removed.id)
+      }
+      characters.push(counterpart)
+      characterIds.add(counterpart.id)
+    }
+  }
+
+  const organizations = rankContextEntries(
+    input.organizations,
+    (organization) => [organization.name, organization.type, organization.description, organization.motto],
+    CONTEXT_ORGANIZATION_LIMIT,
+    contextQuery,
+    preferredOrganizationIds,
+    (organization) => organization.id
+  )
+  const organizationIds = new Set(organizations.map((organization) => organization.id))
+  const worldviews = rankContextEntries(
+    input.worldviewEntries,
+    (entry) => [entry.title, entry.type, entry.content],
+    CONTEXT_WORLDVIEW_LIMIT,
+    contextQuery,
+    preferredWorldviewIds,
+    (entry) => entry.id,
+    false
+  )
+  const relationships = rankContextEntries(
+    input.characterRelationships.filter((relationship) => (
+      characterIds.has(relationship.fromCharacterId) || characterIds.has(relationship.toCharacterId)
+    )),
+    (relationship) => [relationship.type, relationship.description],
+    CONTEXT_RELATION_LIMIT,
+    contextQuery
+  )
+  const memberships = rankContextEntries(
+    input.organizationMemberships.filter((membership) => (
+      characterIds.has(membership.characterId) || organizationIds.has(membership.organizationId)
+    )),
+    (membership) => [membership.role, membership.notes],
+    CONTEXT_MEMBERSHIP_LIMIT,
+    contextQuery
+  )
+
+  return { worldviewEntries: worldviews, characters, organizations, characterRelationships: relationships, organizationMemberships: memberships }
+}
+
+export function buildChapterReferencePreview(input: {
+  chapter?: ChapterDraft
+  chapterContent: string
+  currentOutlineItem?: ChapterOutlineItemContext | null
+  relatedChapters: Array<{ title: string; summary: string; preview?: string }>
+  selectedText?: string
+  userPrompt: string
+  worldviewEntries: WorldviewEntry[]
+  characters: CharacterCard[]
+  organizations: OrganizationEntry[]
+  characterRelationships: CharacterRelationship[]
+  organizationMemberships: OrganizationMembership[]
+}): ChapterReferencePreview {
+  const referenceData = selectRelevantReferenceData(input)
+  const characterNameById = new Map(input.characters.map((character) => [character.id, character.name]))
+  const organizationNameById = new Map(input.organizations.map((organization) => [organization.id, organization.name]))
+
+  return {
+    currentOutlineItem: input.currentOutlineItem ?? null,
+    characters: referenceData.characters.map((character) => ({
+      id: character.id,
+      name: character.name,
+      role: character.role
+    })),
+    organizations: referenceData.organizations.map((organization) => ({
+      id: organization.id,
+      name: organization.name,
+      type: organization.type
+    })),
+    worldviewEntries: referenceData.worldviewEntries.map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      type: entry.type
+    })),
+    characterRelationships: referenceData.characterRelationships.map((relationship) => ({
+      id: relationship.id,
+      label: [
+        characterNameById.get(relationship.fromCharacterId) ?? relationship.fromCharacterId,
+        relationship.type,
+        characterNameById.get(relationship.toCharacterId) ?? relationship.toCharacterId
+      ].filter(Boolean).join(' · ')
+    })),
+    organizationMemberships: referenceData.organizationMemberships.map((membership) => ({
+      id: membership.id,
+      label: [
+        characterNameById.get(membership.characterId) ?? membership.characterId,
+        membership.role,
+        organizationNameById.get(membership.organizationId) ?? membership.organizationId
+      ].filter(Boolean).join(' · ')
+    })),
+    counts: {
+      characters: referenceData.characters.length,
+      organizations: referenceData.organizations.length,
+      worldviewEntries: referenceData.worldviewEntries.length,
+      characterRelationships: referenceData.characterRelationships.length,
+      organizationMemberships: referenceData.organizationMemberships.length
+    }
+  }
+}
+
 // 构建发送给 AI 的章节助理上下文对象：
 // 1. 解析项目写作风格预设
 // 2. 基于章节内容筛选最相关的灵感条目（最多6条）
-// 3. 将所有数据精简为 AI 所需的字段格式返回
+// 3. 按当前章节/大纲相关性筛选参考实体，再精简为 AI 所需的字段格式返回
 export function buildChapterAssistantContext(input: ChapterAssistantContextInput): Record<string, unknown> {
   const writingStyle = buildProjectWritingStyleContext(input.project)
+  const relevantReferenceData = selectRelevantReferenceData(input)
+  const currentOutlineItem = buildOutlineItemContext(input.currentOutlineItem, {
+    characters: input.characters,
+    organizations: input.organizations,
+    worldviewEntries: input.worldviewEntries
+  })
   // 根据当前章节标题、摘要和正文内容，从灵感库中挑选最相关的条目
   const relevantInspirationEntries = pickRelevantInspirationEntries(
     input.inspirationEntries,
@@ -174,18 +465,19 @@ export function buildChapterAssistantContext(input: ChapterAssistantContextInput
     relatedChapters: input.relatedChapters,
     volumeChapterSummaries: input.volumeChapterSummaries,
     novelOpenerSummary: input.novelOpenerSummary ?? null,
+    currentOutlineItem,
     recentMessages: input.recentMessages,
     // 只传递活跃（open）的剧情线索，精简字段
     plotThreads: input.plotThreads
       .filter((t) => t.status === 'open')
       .map((t) => ({ title: t.title, description: t.description, status: t.status })),
     // 精简世界观字段，只保留标题和内容
-    worldviewEntries: input.worldviewEntries.map((entry) => ({
+    worldviewEntries: relevantReferenceData.worldviewEntries.map((entry) => ({
       title: entry.title,
       content: entry.content
     })),
     // 精简角色字段，只保留名称、角色和描述
-    characters: input.characters.map((character) => ({
+    characters: relevantReferenceData.characters.map((character) => ({
       // 透传 id：主进程 extractCharacterIds 依赖它把 story-state 收敛到本章相关角色，
       // 不带 id 会退化为注入全项目所有角色状态。id 不会被 formatCharacters 渲染进 prompt。
       id: character.id,
@@ -194,7 +486,7 @@ export function buildChapterAssistantContext(input: ChapterAssistantContextInput
       description: character.description
     })),
     // 精简组织字段，保留核心标识信息
-    organizations: input.organizations.map((organization) => ({
+    organizations: relevantReferenceData.organizations.map((organization) => ({
       id: organization.id,
       name: organization.name,
       type: organization.type,
@@ -202,7 +494,7 @@ export function buildChapterAssistantContext(input: ChapterAssistantContextInput
       motto: organization.motto
     })),
     // 精简角色关系字段
-    characterRelationships: input.characterRelationships.map((relationship) => ({
+    characterRelationships: relevantReferenceData.characterRelationships.map((relationship) => ({
       fromCharacterId: relationship.fromCharacterId,
       toCharacterId: relationship.toCharacterId,
       type: relationship.type,
@@ -210,7 +502,7 @@ export function buildChapterAssistantContext(input: ChapterAssistantContextInput
       intensity: relationship.intensity
     })),
     // 精简组织成员关系字段
-    organizationMemberships: input.organizationMemberships.map((membership) => ({
+    organizationMemberships: relevantReferenceData.organizationMemberships.map((membership) => ({
       characterId: membership.characterId,
       organizationId: membership.organizationId,
       role: membership.role,
@@ -254,6 +546,15 @@ export function buildChapterAssistantContext(input: ChapterAssistantContextInput
 export function buildChapterFirstDraftContext(input: ChapterFirstDraftContextInput): Record<string, unknown> {
   const writingStyle = buildProjectWritingStyleContext(input.project)
   const normalizedChapterContent = input.chapterContent.trim()
+  const relevantReferenceData = selectRelevantReferenceData({
+    ...input,
+    chapterContent: normalizedChapterContent
+  })
+  const currentOutlineItem = buildOutlineItemContext(input.currentOutlineItem, {
+    characters: input.characters,
+    organizations: input.organizations,
+    worldviewEntries: input.worldviewEntries
+  })
   const relevantInspirationEntries = pickRelevantInspirationEntries(
     input.inspirationEntries,
     {
@@ -270,6 +571,9 @@ export function buildChapterFirstDraftContext(input: ChapterFirstDraftContextInp
     projectGenre: input.project?.genre,
     writingStyleLabel: writingStyle.label,
     writingStylePrompt: writingStyle.prompt,
+    chapterId: input.chapter?.id,
+    chapterIndex: input.chapterIndex,
+    deferStoryStateUntilFinal: true,
     chapterTitle: input.chapter?.title,
     chapterSummary: input.chapter?.summary,
     chapterStatus: input.chapter?.status,
@@ -286,11 +590,11 @@ export function buildChapterFirstDraftContext(input: ChapterFirstDraftContextInp
     plotThreads: input.plotThreads
       .filter((t) => t.status === 'open')
       .map((t) => ({ title: t.title, description: t.description, status: t.status })),
-    worldviewEntries: input.worldviewEntries.map((entry) => ({
+    worldviewEntries: relevantReferenceData.worldviewEntries.map((entry) => ({
       title: entry.title,
       content: entry.content
     })),
-    characters: input.characters.map((character) => ({
+    characters: relevantReferenceData.characters.map((character) => ({
       // 透传 id：主进程 extractCharacterIds 依赖它把 story-state 收敛到本章相关角色，
       // 不带 id 会退化为注入全项目所有角色状态。id 不会被 formatCharacters 渲染进 prompt。
       id: character.id,
@@ -298,21 +602,21 @@ export function buildChapterFirstDraftContext(input: ChapterFirstDraftContextInp
       role: character.role,
       description: character.description
     })),
-    organizations: input.organizations.map((organization) => ({
+    organizations: relevantReferenceData.organizations.map((organization) => ({
       id: organization.id,
       name: organization.name,
       type: organization.type,
       description: organization.description,
       motto: organization.motto
     })),
-    characterRelationships: input.characterRelationships.map((relationship) => ({
+    characterRelationships: relevantReferenceData.characterRelationships.map((relationship) => ({
       fromCharacterId: relationship.fromCharacterId,
       toCharacterId: relationship.toCharacterId,
       type: relationship.type,
       description: relationship.description,
       intensity: relationship.intensity
     })),
-    organizationMemberships: input.organizationMemberships.map((membership) => ({
+    organizationMemberships: relevantReferenceData.organizationMemberships.map((membership) => ({
       characterId: membership.characterId,
       organizationId: membership.organizationId,
       role: membership.role,
@@ -324,14 +628,7 @@ export function buildChapterFirstDraftContext(input: ChapterFirstDraftContextInp
       content: entry.content,
       tags: entry.tags
     })),
-    currentOutlineItem: input.currentOutlineItem
-      ? {
-          title: input.currentOutlineItem.title,
-          wordTarget: input.currentOutlineItem.wordTarget,
-          conflict: input.currentOutlineItem.conflict,
-          summary: input.currentOutlineItem.summary
-        }
-      : null,
+    currentOutlineItem,
     outlineChapterSplit: input.outlineChapterSplit ?? null,
     outlineItems: input.outlineItems.map((item) => ({
       title: item.title,

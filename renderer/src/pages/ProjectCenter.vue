@@ -4,6 +4,7 @@ import { useDialog, useMessage } from 'naive-ui'
 
 import HomepageHero from '@/components/home/HomepageHero.vue'
 import HomepageAnnouncementModal from '@/components/home/HomepageAnnouncementModal.vue'
+import HomepageTutorialModal from '@/components/home/HomepageTutorialModal.vue'
 import HomepageUpdateModal from '@/components/home/HomepageUpdateModal.vue'
 import HomepageProjectCollection from '@/components/home/HomepageProjectCollection.vue'
 import HomepageSettingsModal from '@/components/home/HomepageSettingsModal.vue'
@@ -21,6 +22,7 @@ const { announcementStatus, updateStatus, markAnnouncementRead, markUpdateRead }
 const settingsVisible = ref(false)
 const editorVisible = ref(false)
 const announcementVisible = ref(false)
+const tutorialVisible = ref(false)
 const updateVisible = ref(false)
 const editingProject = ref<ProjectSummary | null>(null)
 const archiveImportRef = ref<{
@@ -163,6 +165,7 @@ function requestDeleteProject(projectId: string): void {
         @open-skills="openSkillsPage"
         @open-settings="settingsVisible = true"
         @open-announcement="announcementVisible = true"
+        @open-tutorial="tutorialVisible = true"
         @check-update="markUpdateRead(); updateVisible = true"
       />
 
@@ -184,6 +187,7 @@ function requestDeleteProject(projectId: string): void {
     <HomepageSettingsModal v-model:show="settingsVisible" />
     <ProjectArchiveImportModal ref="archiveImportRef" />
     <HomepageAnnouncementModal v-model:show="announcementVisible" @loaded="markAnnouncementRead" />
+    <HomepageTutorialModal v-model:show="tutorialVisible" />
     <HomepageUpdateModal v-model:show="updateVisible" />
   </section>
 </template>

@@ -1,6 +1,11 @@
 import type { AppSettings } from '../shared-types'
 import { normalizeSettings } from '../settings'
 import { createProxyFetch } from '../proxy-fetch'
+import {
+  isAnthropicProtocol,
+  isOpenCodeProvider,
+  isSupportedProviderModel
+} from '@shared/ai-provider-catalog'
 
 /** 从模型列表接口获取到的模型信息 */
 export interface FetchedModel {
@@ -20,6 +25,7 @@ const KNOWN_COMPAT_SUFFIXES = [
 
 const KNOWN_ENDPOINT_SUFFIXES = [
   '/chat/completions',
+  '/messages',
   '/responses',
   '/embeddings',
   '/models',
@@ -132,12 +138,15 @@ async function fetchModelsAnthropic(baseUrl: string, apiKey: string, requestFetc
 export async function fetchModels(settings: AppSettings): Promise<FetchedModel[]> {
   const normalized = normalizeSettings(settings)
   if (!normalized.baseUrl.trim()) throw new Error('请先填写 Base URL。')
-  if (!normalized.apiKey.trim()) throw new Error('需要 API Key 才能获取模型列表。')
+  if (!normalized.apiKey.trim() && normalized.provider !== 'ollama') {
+    throw new Error('需要 API Key 才能获取模型列表。')
+  }
   const rawBaseUrl = (settings.baseUrl?.trim() || '').replace(/\/+$/, '')
   const requestFetch = createProxyFetch(normalized.proxyUrl)
-  return normalized.provider === 'anthropic'
-    ? fetchModelsAnthropic(rawBaseUrl || normalized.baseUrl, normalized.apiKey, requestFetch)
-    : fetchModelsOpenAiCompatible(rawBaseUrl || normalized.baseUrl, normalized.apiKey, requestFetch)
+  const models = isAnthropicProtocol(normalized.provider, normalized.model, normalized.apiProtocol) && !isOpenCodeProvider(normalized.provider)
+    ? await fetchModelsAnthropic(rawBaseUrl || normalized.baseUrl, normalized.apiKey, requestFetch)
+    : await fetchModelsOpenAiCompatible(rawBaseUrl || normalized.baseUrl, normalized.apiKey, requestFetch)
+  return models.filter((model) => isSupportedProviderModel(normalized.provider, model.id))
 }
 
 /**

@@ -6,6 +6,7 @@ import { useEventListener } from '@vueuse/core'
 import { getChapterCharacterCount } from '@/features/chapters/editorContent'
 import { useAppStore } from '@/stores/app'
 import { buildProjectWritingStyleContext } from '@/features/writingStyles/presets'
+import { resolveOutlineReferenceIds } from '@/features/ai/outlineReferences'
 import { formatVolumeLabel, normalizeVolumeWordTarget } from '@/features/workspace/outlineVolumes'
 import type { OutlineDropPosition } from '@/features/workspace/outlineReorder'
 import { toIpcPayload } from '@/utils/ipcPayload'
@@ -57,6 +58,9 @@ const form = reactive({
   wordTarget: '',
   conflict: '',
   summary: '',
+  relatedCharacterIds: [] as string[],
+  relatedOrganizationIds: [] as string[],
+  relatedWorldviewIds: [] as string[],
   status: 'planned' as OutlineItemStatus
 })
 // 分卷编辑表单
@@ -295,6 +299,24 @@ const volumeOptions = computed<SelectOption[]>(() =>
     value: volume.id
   }))
 )
+const characterOptions = computed<SelectOption[]>(() =>
+  appStore.characters.map((character) => ({
+    label: [character.name, character.role].filter(Boolean).join(' · ') || character.name,
+    value: character.id
+  }))
+)
+const organizationOptions = computed<SelectOption[]>(() =>
+  appStore.organizations.map((organization) => ({
+    label: [organization.name, organization.type].filter(Boolean).join(' · ') || organization.name,
+    value: organization.id
+  }))
+)
+const worldviewOptions = computed<SelectOption[]>(() =>
+  appStore.worldviewEntries.map((entry) => ({
+    label: [entry.title, entry.type].filter(Boolean).join(' · ') || entry.title,
+    value: entry.id
+  }))
+)
 const outlineStatusOptions: SelectOption[] = [
   { label: '点子', value: 'idea' },
   { label: '已规划', value: 'planned' },
@@ -388,29 +410,95 @@ function buildAiOutlineContext(volumeId?: string) {
     : appStore.outlineItems
 
   return items.slice(-24).map((item) => ({
+    id: item.id,
     title: item.title,
     volumeTitle: appStore.outlineVolumes.find((volume) => volume.id === item.volumeId)?.title ?? '',
     conflict: compactForAi(item.conflict, 180),
     summary: compactForAi(item.summary, 320),
+    relatedCharacterIds: item.relatedCharacterIds ?? [],
+    relatedOrganizationIds: item.relatedOrganizationIds ?? [],
+    relatedWorldviewIds: item.relatedWorldviewIds ?? [],
     status: item.status
   }))
 }
 
-function buildAiWorldviewContext() {
-  return appStore.worldviewEntries.slice(0, 16).map((entry) => ({
-    type: entry.type,
-    title: entry.title,
-    content: compactForAi(entry.content, 320)
-  }))
+function prioritizeById<T extends { id: string }>(items: T[], priorityIds: Set<string>, limit = 24): T[] {
+  return [
+    ...items.filter((item) => priorityIds.has(item.id)),
+    ...items.filter((item) => !priorityIds.has(item.id))
+  ].slice(0, limit)
 }
 
-function buildAiCharactersContext() {
-  return appStore.characters.slice(0, 16).map((character) => ({
-    name: character.name,
-    role: character.role,
-    description: compactForAi(character.description, 260),
-    tags: character.tags.map((tag) => tag.label)
-  }))
+function buildAiEntityContext(volumeId?: string) {
+  const referenceItems = volumeId
+    ? appStore.outlineItems.filter((item) => item.volumeId === volumeId)
+    : appStore.outlineItems
+  const characterPriorityIds = new Set(referenceItems.flatMap((item) => item.relatedCharacterIds ?? []))
+  const organizationPriorityIds = new Set(referenceItems.flatMap((item) => item.relatedOrganizationIds ?? []))
+  const worldviewPriorityIds = new Set(referenceItems.flatMap((item) => item.relatedWorldviewIds ?? []))
+  const characters = prioritizeById(appStore.characters, characterPriorityIds)
+  const organizations = prioritizeById(appStore.organizations, organizationPriorityIds)
+  const worldviewEntries = prioritizeById(appStore.worldviewEntries, worldviewPriorityIds)
+  const includedCharacterIds = new Set(characters.map((item) => item.id))
+  const includedOrganizationIds = new Set(organizations.map((item) => item.id))
+  const characterNameById = new Map(appStore.characters.map((item) => [item.id, item.name]))
+  const organizationNameById = new Map(appStore.organizations.map((item) => [item.id, item.name]))
+
+  return {
+    projectId: appStore.currentProject?.id,
+    worldviewEntries: worldviewEntries.map((entry) => ({
+      id: entry.id,
+      type: entry.type,
+      title: entry.title,
+      content: compactForAi(entry.content, 320)
+    })),
+    characters: characters.map((character) => ({
+      id: character.id,
+      name: character.name,
+      role: character.role,
+      description: compactForAi(character.description, 260),
+      tags: character.tags.map((tag) => tag.label)
+    })),
+    organizations: organizations.map((organization) => ({
+      id: organization.id,
+      name: organization.name,
+      type: organization.type,
+      description: compactForAi(organization.description, 260)
+    })),
+    characterRelationships: appStore.characterRelationships
+      .filter((relationship) =>
+        includedCharacterIds.has(relationship.fromCharacterId) || includedCharacterIds.has(relationship.toCharacterId)
+      )
+      .slice(0, 32)
+      .map((relationship) => ({
+        id: relationship.id,
+        fromCharacterId: relationship.fromCharacterId,
+        fromCharacterName: characterNameById.get(relationship.fromCharacterId) ?? '',
+        toCharacterId: relationship.toCharacterId,
+        toCharacterName: characterNameById.get(relationship.toCharacterId) ?? '',
+        type: relationship.type,
+        description: compactForAi(relationship.description, 220),
+        intensity: relationship.intensity
+      })),
+    organizationMemberships: appStore.organizationMemberships
+      .filter((membership) =>
+        includedCharacterIds.has(membership.characterId) || includedOrganizationIds.has(membership.organizationId)
+      )
+      .slice(0, 32)
+      .map((membership) => ({
+        id: membership.id,
+        characterId: membership.characterId,
+        characterName: characterNameById.get(membership.characterId) ?? '',
+        organizationId: membership.organizationId,
+        organizationName: organizationNameById.get(membership.organizationId) ?? '',
+        role: membership.role,
+        notes: compactForAi(membership.notes, 180)
+      }))
+  }
+}
+
+function buildAiOutlineReferenceText(item: { title?: string; conflict?: string; summary?: string }): string {
+  return [item.title, item.conflict, item.summary].filter(Boolean).join('\n')
 }
 
 // 打开新建大纲节点弹窗，默认归属到指定分卷
@@ -439,7 +527,6 @@ async function handleExpandOutline(): Promise<void> {
         label: 'AI 扩写分卷',
         description: '正在规划新的大纲分卷',
         panel: 'outline',
-        timeoutMs: 300_000
       },
       () =>
         window.characterArc.generateAi(toIpcPayload({
@@ -456,8 +543,7 @@ async function handleExpandOutline(): Promise<void> {
             outlineTitles: appStore.outlineItems.map((item) => item.title),
             volumes: buildAiVolumesContext(),
             outlineItems: buildAiOutlineContext(),
-            worldviewEntries: buildAiWorldviewContext(),
-            characters: buildAiCharactersContext(),
+            ...buildAiEntityContext(),
             worldviewTitles: appStore.worldviewEntries.map((entry) => entry.title),
             characterNames: appStore.characters.map((character) => character.name)
           }
@@ -500,7 +586,6 @@ async function handleExpandVolumeOutline(volume: OutlineVolume): Promise<void> {
         label: `AI 扩写节点·${volume.title}`,
         description: `正在为《${volume.title}》扩写 3-5 个子节点`,
         panel: 'outline',
-        timeoutMs: 300_000
       },
       () =>
         window.characterArc.generateAi(toIpcPayload({
@@ -518,13 +603,7 @@ async function handleExpandVolumeOutline(volume: OutlineVolume): Promise<void> {
               worldviewTitles: appStore.worldviewEntries.map((entry) => entry.title),
               volumes: buildAiVolumesContext(),
               outlineItems: buildAiOutlineContext(),
-              worldviewEntries: buildAiWorldviewContext(),
-              characters: appStore.characters.map((character) => ({
-                name: character.name,
-                role: character.role,
-                description: compactForAi(character.description, 260),
-                tags: character.tags.map((tag) => tag.label)
-              })),
+              ...buildAiEntityContext(volume.id),
               currentVolumeOutlineItems: appStore.outlineItems
                 .filter((item) => item.volumeId === volume.id)
                 .map((item) => ({
@@ -548,6 +627,9 @@ async function handleExpandVolumeOutline(volume: OutlineVolume): Promise<void> {
         wordTarget?: string
         conflict?: string
         summary?: string
+        relatedCharacterIds?: string[]
+        relatedOrganizationIds?: string[]
+        relatedWorldviewIds?: string[]
       }>
     }
     const entries = Array.isArray(payload.entries) ? payload.entries : []
@@ -556,12 +638,16 @@ async function handleExpandVolumeOutline(volume: OutlineVolume): Promise<void> {
     }
 
     entries.forEach((entry) => {
+      const referenceText = buildAiOutlineReferenceText(entry)
       appStore.createOutlineItem({
         volumeId: volume.id,
         title: entry.title,
         wordTarget: normalizeOutlineItemWordTarget(entry.wordTarget),
         conflict: entry.conflict,
         summary: entry.summary,
+        relatedCharacterIds: resolveOutlineReferenceIds(entry.relatedCharacterIds, appStore.characters, referenceText),
+        relatedOrganizationIds: resolveOutlineReferenceIds(entry.relatedOrganizationIds, appStore.organizations, referenceText),
+        relatedWorldviewIds: resolveOutlineReferenceIds(entry.relatedWorldviewIds, appStore.worldviewEntries, referenceText),
         status: 'planned'
       })
     })
@@ -596,6 +682,9 @@ function openEditor(item?: OutlineItem): void {
   form.wordTarget = item?.wordTarget ?? '3000'
   form.conflict = item?.conflict ?? ''
   form.summary = item?.summary ?? ''
+  form.relatedCharacterIds = [...(item?.relatedCharacterIds ?? [])]
+  form.relatedOrganizationIds = [...(item?.relatedOrganizationIds ?? [])]
+  form.relatedWorldviewIds = [...(item?.relatedWorldviewIds ?? [])]
   form.status = item?.status ?? 'planned'
   editorVisible.value = true
 }
@@ -1548,8 +1637,7 @@ async function handleAiEnhanceItem(): Promise<void> {
             outlineTitles: appStore.outlineItems.map((i) => i.title),
             volumes: buildAiVolumesContext(),
             outlineItems: buildAiOutlineContext(),
-            worldviewEntries: buildAiWorldviewContext(),
-            characters: buildAiCharactersContext(),
+            ...buildAiEntityContext(form.volumeId),
             currentVolumeOutlineItems: appStore.outlineItems
               .filter((i) => i.volumeId === form.volumeId)
               .map((i) => ({ title: i.title, conflict: i.conflict, summary: i.summary })),
@@ -1563,14 +1651,24 @@ async function handleAiEnhanceItem(): Promise<void> {
       throw new Error(result.error ?? 'AI 补充失败，请检查模型配置')
     }
 
-    const suggested = result.result as { title?: string; wordTarget?: string; conflict?: string; summary?: string }
+    const suggested = result.result as {
+      title?: string; wordTarget?: string; conflict?: string; summary?: string
+      relatedCharacterIds?: string[]; relatedOrganizationIds?: string[]; relatedWorldviewIds?: string[]
+    }
     const suggestedWordTarget = normalizeOutlineItemWordTarget(suggested.wordTarget)
+    const referenceText = buildAiOutlineReferenceText(suggested)
+    const suggestedCharacterIds = resolveOutlineReferenceIds(suggested.relatedCharacterIds, appStore.characters, referenceText)
+    const suggestedOrganizationIds = resolveOutlineReferenceIds(suggested.relatedOrganizationIds, appStore.organizations, referenceText)
+    const suggestedWorldviewIds = resolveOutlineReferenceIds(suggested.relatedWorldviewIds, appStore.worldviewEntries, referenceText)
 
     enhanceItemFields.value = [
       { key: 'title', label: '节点标题', type: 'text', original: form.title, suggested: suggested.title ?? '', changed: (suggested.title ?? '') !== form.title && Boolean(suggested.title?.trim()) },
       { key: 'wordTarget', label: '预估字数', type: 'text', original: form.wordTarget, suggested: suggestedWordTarget, changed: suggestedWordTarget !== form.wordTarget },
       { key: 'conflict', label: '核心冲突', type: 'text', original: form.conflict, suggested: suggested.conflict ?? '', changed: (suggested.conflict ?? '') !== form.conflict && Boolean(suggested.conflict?.trim()) },
-      { key: 'summary', label: '剧情描述', type: 'textarea', original: form.summary, suggested: suggested.summary ?? '', changed: (suggested.summary ?? '') !== form.summary && Boolean(suggested.summary?.trim()) }
+      { key: 'summary', label: '剧情描述', type: 'textarea', original: form.summary, suggested: suggested.summary ?? '', changed: (suggested.summary ?? '') !== form.summary && Boolean(suggested.summary?.trim()) },
+      { key: 'relatedCharacterIds', label: '关联角色', type: 'tags', original: form.relatedCharacterIds, suggested: suggestedCharacterIds, changed: JSON.stringify(suggestedCharacterIds) !== JSON.stringify(form.relatedCharacterIds) },
+      { key: 'relatedOrganizationIds', label: '关联组织', type: 'tags', original: form.relatedOrganizationIds, suggested: suggestedOrganizationIds, changed: JSON.stringify(suggestedOrganizationIds) !== JSON.stringify(form.relatedOrganizationIds) },
+      { key: 'relatedWorldviewIds', label: '关联设定', type: 'tags', original: form.relatedWorldviewIds, suggested: suggestedWorldviewIds, changed: JSON.stringify(suggestedWorldviewIds) !== JSON.stringify(form.relatedWorldviewIds) }
     ]
     enhanceItemVisible.value = true
   } catch (error) {
@@ -1583,6 +1681,9 @@ function handleEnhanceItemApply(accepted: Record<string, string | string[]>): vo
   if (accepted.wordTarget != null) form.wordTarget = normalizeOutlineItemWordTarget(accepted.wordTarget)
   if (accepted.conflict != null) form.conflict = accepted.conflict as string
   if (accepted.summary != null) form.summary = accepted.summary as string
+  if (accepted.relatedCharacterIds != null) form.relatedCharacterIds = accepted.relatedCharacterIds as string[]
+  if (accepted.relatedOrganizationIds != null) form.relatedOrganizationIds = accepted.relatedOrganizationIds as string[]
+  if (accepted.relatedWorldviewIds != null) form.relatedWorldviewIds = accepted.relatedWorldviewIds as string[]
   enhanceItemVisible.value = false
 }
 
@@ -1612,8 +1713,7 @@ async function handleAiEnhanceVolume(): Promise<void> {
             volumeTitles: appStore.outlineVolumes.map((v) => v.title),
             volumes: buildAiVolumesContext(),
             outlineItems: buildAiOutlineContext(),
-            worldviewEntries: buildAiWorldviewContext(),
-            characters: buildAiCharactersContext(),
+            ...buildAiEntityContext(),
             worldviewTitles: appStore.worldviewEntries.map((e) => e.title),
             characterNames: appStore.characters.map((c) => c.name)
           }
@@ -2101,6 +2201,39 @@ watch(
               <n-input v-model:value="form.wordTarget" placeholder="例如：3200">
                 <template #suffix>字</template>
               </n-input>
+            </n-form-item>
+            <n-form-item label="关联角色">
+              <n-select
+                v-model:value="form.relatedCharacterIds"
+                :options="characterOptions"
+                multiple
+                filterable
+                clearable
+                max-tag-count="responsive"
+                placeholder="可选，指定这一节点会出现或重点影响的角色"
+              />
+            </n-form-item>
+            <n-form-item label="关联组织">
+              <n-select
+                v-model:value="form.relatedOrganizationIds"
+                :options="organizationOptions"
+                multiple
+                filterable
+                clearable
+                max-tag-count="responsive"
+                placeholder="可选，指定这一节点会涉及的组织"
+              />
+            </n-form-item>
+            <n-form-item label="关联设定">
+              <n-select
+                v-model:value="form.relatedWorldviewIds"
+                :options="worldviewOptions"
+                multiple
+                filterable
+                clearable
+                max-tag-count="responsive"
+                placeholder="可选，指定这一节点依赖的世界观设定"
+              />
             </n-form-item>
             <n-form-item label="推进状态">
               <n-select v-model:value="form.status" :options="outlineStatusOptions" placeholder="选择当前节点所处阶段" />

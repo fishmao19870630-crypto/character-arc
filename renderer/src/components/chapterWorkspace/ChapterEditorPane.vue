@@ -94,9 +94,9 @@ const progressPercent = computed(() => {
 })
 
 const saveStatusText = computed(() => {
-  if (appStore.isPersistencePending) {
-    return appStore.isLiveAutoSave ? '排队保存' : '自动保存中'
-  }
+  if (appStore.persistenceError) return '保存失败'
+  if (appStore.isPersisting) return '正在保存'
+  if (appStore.isPersistencePending) return '等待自动保存'
   return '已保存'
 })
 
@@ -350,7 +350,13 @@ onBeforeUnmount(() => {
 
       <div class="ep-actions">
         <span class="save-indicator">
-          <span class="dot" :class="{ pending: appStore.isPersistencePending }" />
+          <span
+            class="dot"
+            :class="{
+              pending: appStore.isPersistencePending && !appStore.persistenceError,
+              failed: Boolean(appStore.persistenceError)
+            }"
+          />
           {{ saveStatusText }}
         </span>
         <span class="divider" />
@@ -409,7 +415,7 @@ onBeforeUnmount(() => {
             class="ep-title"
             :value="currentChapter.title"
             placeholder="章节标题"
-            @change="(e) => appStore.updateChapter(currentChapter!.id, { title: (e.target as HTMLInputElement).value })"
+            @change="(e) => appStore.updateChapterTitle((e.target as HTMLInputElement).value)"
           />
 
           <div class="ep-meta-row">
@@ -649,6 +655,10 @@ onBeforeUnmount(() => {
 
 .save-indicator .dot.pending {
   background: var(--arc-warning);
+}
+
+.save-indicator .dot.failed {
+  background: var(--arc-danger);
 }
 
 .divider {

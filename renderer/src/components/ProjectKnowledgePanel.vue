@@ -728,13 +728,13 @@ watch(
       </div>
 
       <p class="pk-card-desc">
-        补录或写作过程中沉淀的结构化世界状态。这些数据会在 AI 写作/审校时作为上下文注入，保证前后一致。
+        章节定稿或状态补录时沉淀的结构化世界状态。这些数据会在 AI 写作/审校时作为上下文注入，保证前后一致。
       </p>
 
       <n-spin :show="isLoadingStoryState">
         <n-empty
           v-if="!hasStoryState"
-          :description="appStore.currentProject ? '状态库还是空的，先执行上方的「状态补录」或继续写作生成。' : '请先选择一个项目。'"
+          :description="appStore.currentProject ? '状态库还是空的，请先定稿章节或执行上方的「状态补录」。' : '请先选择一个项目。'"
         />
         <n-collapse v-else :default-expanded-names="['characters', 'foreshadowing', 'relationships']" arrow-placement="right">
           <n-collapse-item v-if="storyState?.characterStates.length" name="characters">

@@ -172,6 +172,9 @@ export async function ensureWorkspaceDb(): Promise<DatabaseSync> {
       word_target TEXT NOT NULL,
       conflict TEXT NOT NULL,
       summary TEXT NOT NULL,
+      related_character_ids_json TEXT NOT NULL DEFAULT '[]',
+      related_organization_ids_json TEXT NOT NULL DEFAULT '[]',
+      related_worldview_ids_json TEXT NOT NULL DEFAULT '[]',
       sort_order INTEGER NOT NULL,
       FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
       FOREIGN KEY (volume_id) REFERENCES outline_volumes (id) ON DELETE CASCADE
@@ -258,6 +261,26 @@ export async function ensureWorkspaceDb(): Promise<DatabaseSync> {
       response_preview TEXT NOT NULL DEFAULT '',
       sort_order INTEGER NOT NULL,
       FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
+    ) STRICT;
+
+    CREATE TABLE IF NOT EXISTS global_ai_runs (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL DEFAULT '',
+      chapter_id TEXT NOT NULL DEFAULT '',
+      task TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      status TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      finished_at TEXT NOT NULL DEFAULT '',
+      duration_ms INTEGER,
+      used_knowledge_json TEXT NOT NULL DEFAULT '[]',
+      tool_calls_json TEXT NOT NULL DEFAULT '[]',
+      usage_json TEXT NOT NULL DEFAULT '{}',
+      repair_triggered INTEGER NOT NULL DEFAULT 0,
+      error TEXT NOT NULL DEFAULT '',
+      response_preview TEXT NOT NULL DEFAULT '',
+      sort_order INTEGER NOT NULL
     ) STRICT;
 
     CREATE TABLE IF NOT EXISTS workflow_documents (
@@ -361,6 +384,7 @@ export async function ensureWorkspaceDb(): Promise<DatabaseSync> {
   ensureProjectColumns(db)
   ensureProjectScopedColumns(db)
   ensureVolumeColumns(db)
+  ensureOutlineItemColumns(db)
   ensureWorkflowDocumentColumns(db)
   ensureKnowledgeDocumentSchema(db)
   initStoryStateSchema(db)
@@ -385,7 +409,7 @@ function ensureAppSettingsColumns(db: DatabaseSync): void {
   const columnNames = new Set(columns.map((column) => column.name))
 
   if (!columnNames.has('model')) {
-    db.exec(`ALTER TABLE app_settings ADD COLUMN model TEXT NOT NULL DEFAULT 'deepseek-chat';`)
+    db.exec(`ALTER TABLE app_settings ADD COLUMN model TEXT NOT NULL DEFAULT '';`)
   }
 
   if (!columnNames.has('ui_scale')) {
@@ -525,6 +549,23 @@ function ensureVolumeColumns(db: DatabaseSync): void {
   const outlineColumnNames = new Set(outlineColumns.map((column) => column.name))
   if (!outlineColumnNames.has('status')) {
     db.exec(`ALTER TABLE outline_items ADD COLUMN status TEXT NOT NULL DEFAULT 'planned';`)
+  }
+}
+
+function ensureOutlineItemColumns(db: DatabaseSync): void {
+  const columns = db.prepare(`PRAGMA table_info('outline_items')`).all() as Array<{ name: string }>
+  const columnNames = new Set(columns.map((column) => column.name))
+
+  if (!columnNames.has('related_character_ids_json')) {
+    db.exec(`ALTER TABLE outline_items ADD COLUMN related_character_ids_json TEXT NOT NULL DEFAULT '[]';`)
+  }
+
+  if (!columnNames.has('related_organization_ids_json')) {
+    db.exec(`ALTER TABLE outline_items ADD COLUMN related_organization_ids_json TEXT NOT NULL DEFAULT '[]';`)
+  }
+
+  if (!columnNames.has('related_worldview_ids_json')) {
+    db.exec(`ALTER TABLE outline_items ADD COLUMN related_worldview_ids_json TEXT NOT NULL DEFAULT '[]';`)
   }
 }
 
@@ -777,11 +818,39 @@ export function readWorkspaceSnapshot(db: DatabaseSync): WorkspacePayload | null
       }
     }) as WorkspacePayload['referenceWorks']
 
+    const aiRuns = db.prepare(`
+      SELECT project_id AS projectId, id, chapter_id AS chapterId, task, provider, model, status,
+        started_at AS startedAt, finished_at AS finishedAt, duration_ms AS durationMs,
+        used_knowledge_json AS usedKnowledgeJson, tool_calls_json AS toolCallsJson,
+        usage_json AS usageJson, repair_triggered AS repairTriggered, error,
+        response_preview AS responsePreview
+      FROM global_ai_runs
+      ORDER BY started_at ASC, sort_order ASC
+    `).all().map((row) => ({
+      projectId: row.projectId as string,
+      id: row.id as string,
+      chapterId: (row.chapterId as string) || undefined,
+      task: row.task as string,
+      provider: row.provider as string,
+      model: row.model as string,
+      status: row.status as WorkspaceAiRunStatus,
+      startedAt: row.startedAt as string,
+      finishedAt: (row.finishedAt as string) || undefined,
+      durationMs: typeof row.durationMs === 'number' ? row.durationMs : undefined,
+      usage: parseJson(row.usageJson as string, {} as NonNullable<WorkspaceAiRunRecord['usage']>),
+      usedKnowledge: parseJson(row.usedKnowledgeJson as string, [] as WorkspaceAiRunKnowledgeItem[]),
+      toolCalls: parseJson(row.toolCallsJson as string, [] as NonNullable<WorkspaceAiRunRecord['toolCalls']>),
+      repairTriggered: Boolean(row.repairTriggered),
+      error: row.error as string,
+      responsePreview: row.responsePreview as string
+    })) as WorkspacePayload['aiRuns']
+
     return {
       theme: settings?.theme ?? 'ocean',
       selectedProjectId: '',
       knowledgeDocuments,
       referenceWorks,
+      aiRuns,
       projects: [],
       workspaces: {},
       appSettings: settings
@@ -891,10 +960,27 @@ export function readWorkspaceSnapshot(db: DatabaseSync): WorkspacePayload | null
   })) as Array<WorkspacePayload['workspaces'][string]['outlineVolumes'][number] & { projectId: string }>
 
   const outlineItems = db.prepare(`
-    SELECT project_id AS projectId, volume_id AS volumeId, id, title, word_target AS wordTarget, conflict, summary, status, sort_order AS sortOrder
+    SELECT project_id AS projectId, volume_id AS volumeId, id, title, word_target AS wordTarget, conflict, summary,
+      related_character_ids_json AS relatedCharacterIdsJson,
+      related_organization_ids_json AS relatedOrganizationIdsJson,
+      related_worldview_ids_json AS relatedWorldviewIdsJson,
+      status, sort_order AS sortOrder
     FROM outline_items
     ORDER BY project_id ASC, sort_order ASC
-  `).all() as Array<WorkspacePayload['workspaces'][string]['outlineItems'][number] & { projectId: string }>
+  `).all().map((row) => ({
+    projectId: row.projectId as string,
+    id: row.id as string,
+    volumeId: row.volumeId as string,
+    title: row.title as string,
+    wordTarget: row.wordTarget as string,
+    conflict: row.conflict as string,
+    summary: row.summary as string,
+    relatedCharacterIds: parseJson(row.relatedCharacterIdsJson as string, [] as string[]),
+    relatedOrganizationIds: parseJson(row.relatedOrganizationIdsJson as string, [] as string[]),
+    relatedWorldviewIds: parseJson(row.relatedWorldviewIdsJson as string, [] as string[]),
+    status: row.status as WorkspacePayload['workspaces'][string]['outlineItems'][number]['status'],
+    sortOrder: row.sortOrder as number
+  })) as Array<WorkspacePayload['workspaces'][string]['outlineItems'][number] & { projectId: string }>
 
   const chapters = db.prepare(`
     SELECT project_id AS projectId, volume_id AS volumeId, outline_item_id AS outlineItemId, id, title, summary, status, word_target AS wordTarget, content
@@ -978,13 +1064,26 @@ export function readWorkspaceSnapshot(db: DatabaseSync): WorkspacePayload | null
     }
   }) as WorkspacePayload['referenceWorks']
 
+  // 旧版本按项目存储日志；迁移到无项目外键的全局历史表，保留 project_id 作为可选上下文。
+  db.exec(`
+    INSERT OR IGNORE INTO global_ai_runs (
+      id, project_id, chapter_id, task, provider, model, status, started_at, finished_at,
+      duration_ms, used_knowledge_json, tool_calls_json, usage_json, repair_triggered,
+      error, response_preview, sort_order
+    )
+    SELECT id, project_id, chapter_id, task, provider, model, status, started_at, finished_at,
+      duration_ms, used_knowledge_json, tool_calls_json, usage_json, repair_triggered,
+      error, response_preview, sort_order
+    FROM ai_runs;
+  `)
+
   const aiRuns = db.prepare(`
     SELECT project_id AS projectId, id, chapter_id AS chapterId, task, provider, model, status,
       started_at AS startedAt, finished_at AS finishedAt, duration_ms AS durationMs,
       used_knowledge_json AS usedKnowledgeJson, tool_calls_json AS toolCallsJson, usage_json AS usageJson, repair_triggered AS repairTriggered,
       error, response_preview AS responsePreview
-    FROM ai_runs
-    ORDER BY project_id ASC, sort_order ASC
+    FROM global_ai_runs
+    ORDER BY started_at ASC, sort_order ASC
   `).all().map((row) => ({
     projectId: row.projectId as string,
     id: row.id as string,
@@ -1002,7 +1101,7 @@ export function readWorkspaceSnapshot(db: DatabaseSync): WorkspacePayload | null
     repairTriggered: Boolean(row.repairTriggered),
     error: row.error as string,
     responsePreview: row.responsePreview as string
-  })) as Array<WorkspacePayload['workspaces'][string]['aiRuns'][number] & { projectId: string }>
+  })) as WorkspacePayload['aiRuns']
 
   const workflowDocuments = db.prepare(`
     SELECT project_id AS projectId, volume_id AS volumeId, doc_key AS docKey, title, content, updated_at AS updatedAt
@@ -1113,7 +1212,6 @@ export function readWorkspaceSnapshot(db: DatabaseSync): WorkspacePayload | null
   const versionsByProject = groupBy(chapterVersions)
   const messagesByProject = groupBy(messages)
   const assistantSessionsByProject = groupBy(assistantSessions)
-  const aiRunsByProject = groupBy(aiRuns)
   const plotThreadsByProject = groupBy(plotThreads)
 
   // workflow documents need compound key: projectId + volumeId
@@ -1164,8 +1262,7 @@ export function readWorkspaceSnapshot(db: DatabaseSync): WorkspacePayload | null
           (assistantSessionsByProject.get(project.id) ?? []).find((session) => session.active)?.id
           ?? (assistantSessionsByProject.get(project.id) ?? [])[0]?.id
           ?? '',
-        aiRuns: (aiRunsByProject.get(project.id) ?? [])
-          .map(({ projectId: _projectId, ...run }) => run),
+        aiRuns: [],
         workflowDocuments: [],
         plotThreads: (plotThreadsByProject.get(project.id) ?? [])
           .map(({ projectId: _projectId, tagsJson, ...thread }) => ({
@@ -1181,6 +1278,7 @@ export function readWorkspaceSnapshot(db: DatabaseSync): WorkspacePayload | null
     selectedProjectId: settings.selectedProjectId,
     knowledgeDocuments,
     referenceWorks,
+    aiRuns,
     projects,
     workspaces,
     appSettings: {
@@ -1238,7 +1336,6 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
       ai_messages: new Set(),
       knowledge_documents: new Set(),
       reference_works: new Set(),
-      ai_runs: new Set(),
       workflow_documents: new Set(),
       plot_threads: new Set(),
       assistant_sessions: new Set(),
@@ -1321,8 +1418,12 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
     `)
 
     const insertOutline = db.prepare(`
-      INSERT OR REPLACE INTO outline_items (id, project_id, volume_id, title, word_target, conflict, summary, status, sort_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO outline_items (
+        id, project_id, volume_id, title, word_target, conflict, summary,
+        related_character_ids_json, related_organization_ids_json, related_worldview_ids_json,
+        status, sort_order
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
 
     const insertChapter = db.prepare(`
@@ -1355,7 +1456,7 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
     `)
 
     const insertAiRun = db.prepare(`
-      INSERT OR REPLACE INTO ai_runs (id, project_id, chapter_id, task, provider, model, status, started_at, finished_at, duration_ms, used_knowledge_json, tool_calls_json, usage_json, repair_triggered, error, response_preview, sort_order)
+      INSERT OR REPLACE INTO global_ai_runs (id, project_id, chapter_id, task, provider, model, status, started_at, finished_at, duration_ms, used_knowledge_json, tool_calls_json, usage_json, repair_triggered, error, response_preview, sort_order)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
 
@@ -1493,6 +1594,9 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
           item.wordTarget,
           item.conflict,
           item.summary,
+          JSON.stringify(item.relatedCharacterIds ?? []),
+          JSON.stringify(item.relatedOrganizationIds ?? []),
+          JSON.stringify(item.relatedWorldviewIds ?? []),
           item.status,
           item.sortOrder ?? index
         )
@@ -1564,29 +1668,6 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
           }),
           session.createdAt,
           session.updatedAt
-        )
-      })
-
-      workspace.aiRuns.forEach((run, index) => {
-        allIds.ai_runs.add(run.id)
-        insertAiRun.run(
-          run.id,
-          project.id,
-          run.chapterId ?? '',
-          run.task,
-          run.provider,
-          run.model,
-          run.status,
-          run.startedAt,
-          run.finishedAt ?? '',
-          typeof run.durationMs === 'number' ? Math.max(0, Math.round(run.durationMs)) : null,
-          JSON.stringify(run.usedKnowledge ?? []),
-          JSON.stringify(run.toolCalls ?? []),
-          JSON.stringify(run.usage ?? {}),
-          run.repairTriggered ? 1 : 0,
-          run.error ?? '',
-          run.responsePreview ?? '',
-          index
         )
       })
 
@@ -1675,6 +1756,29 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
         JSON.stringify(work.analysis ?? null),
         work.analysis?.createdAt ?? now,
         now
+      )
+    })
+
+    const globalAiRuns = Array.isArray(payload.aiRuns) ? payload.aiRuns : []
+    globalAiRuns.forEach((run, index) => {
+      insertAiRun.run(
+        run.id,
+        run.projectId ?? '',
+        run.chapterId ?? '',
+        run.task,
+        run.provider,
+        run.model,
+        run.status,
+        run.startedAt,
+        run.finishedAt ?? '',
+        typeof run.durationMs === 'number' ? Math.max(0, Math.round(run.durationMs)) : null,
+        JSON.stringify(run.usedKnowledge ?? []),
+        JSON.stringify(run.toolCalls ?? []),
+        JSON.stringify(run.usage ?? {}),
+        run.repairTriggered ? 1 : 0,
+        run.error ?? '',
+        run.responsePreview ?? '',
+        index
       )
     })
 

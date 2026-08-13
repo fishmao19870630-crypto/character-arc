@@ -9,6 +9,7 @@
  */
 
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { useAppStore } from '@/stores/app'
 import type {
   AssistantEventPush,
   AssistantSession,
@@ -17,7 +18,8 @@ import type {
   StagedChange,
   SurfaceDefinition,
   TurnAttachment,
-  TurnEvent
+  TurnEvent,
+  TurnTruncateResult
 } from '@shared/assistant-runtime'
 
 // ============================================================================
@@ -89,6 +91,7 @@ export interface AssistantSendOptions {
 
 export function useAssistant(options: UseAssistantOptions) {
   const A = window.characterArc.assistant
+  const appStore = useAppStore()
 
   // === 会话 ===
   const sessions = ref<AssistantSession[]>([])
@@ -105,6 +108,7 @@ export function useAssistant(options: UseAssistantOptions) {
   // === Streaming 状态 ===
   const streamingTurnId = ref<string | null>(null)
   const isStreaming = computed(() => streamingTurnId.value !== null)
+  const isCanceling = ref(false)
 
   // 流式生成时已累积的 assistant 文字数（用于 Composer 进度提示）
   const streamingCharCount = computed(() => {
@@ -127,6 +131,10 @@ export function useAssistant(options: UseAssistantOptions) {
 
   // === Composer ===
   const composerValue = ref('')
+  const editingTurnId = ref<string | null>(null)
+  const editingDraft = ref('')
+  const restoredDraftLabel = ref('')
+  const isTruncating = ref(false)
 
   // === 错误 ===
   const lastError = ref<string | null>(null)
@@ -239,6 +247,7 @@ export function useAssistant(options: UseAssistantOptions) {
           appendStaged(evt.changeId, evt.seq)
           break
         case 'resumable':
+          if (options.surface.scope === 'project') break
           resumable = {
             label: evt.label,
             prompt: evt.prompt,
@@ -313,9 +322,24 @@ export function useAssistant(options: UseAssistantOptions) {
 
   function appendEventToTurn(turnId: string, event: TurnEvent): void {
     const map = new Map(eventsByTurn.value)
-    const list = map.get(turnId) ?? []
-    map.set(turnId, [...list, event])
+    const list = [...(map.get(turnId) ?? [])]
+    appendCoalescedEvent(list, event)
+    map.set(turnId, list)
     eventsByTurn.value = map
+  }
+
+  /** 合并相邻文本事件，避免长回复按 token 累积成数千个响应式节点。 */
+  function appendCoalescedEvent(list: TurnEvent[], event: TurnEvent): void {
+    const last = list[list.length - 1]
+    if (last?.kind === 'chunk' && event.kind === 'chunk') {
+      list[list.length - 1] = { ...last, delta: last.delta + event.delta }
+      return
+    }
+    if (last?.kind === 'reasoning' && event.kind === 'reasoning') {
+      list[list.length - 1] = { ...last, delta: last.delta + event.delta }
+      return
+    }
+    list.push(event)
   }
 
   const unsubscribe = A.onEvent((push: AssistantEventPush) => {
@@ -357,6 +381,9 @@ export function useAssistant(options: UseAssistantOptions) {
         t.id === push.turnId ? { ...t, status: nextStatus } : t
       )
       if (streamingTurnId.value === push.turnId) streamingTurnId.value = null
+      isCanceling.value = false
+    } else if (turns.value.find((turn) => turn.id === push.turnId)?.status === 'streaming') {
+      streamingTurnId.value = push.turnId
     }
 
     // 暂存变更相关：任一 staged_change 事件都重拉一次 stageList，保持简单可靠
@@ -388,6 +415,8 @@ export function useAssistant(options: UseAssistantOptions) {
       eventsByTurn.value = new Map()
       stagedChanges.value = []
       streamingTurnId.value = null
+      cancelEditing()
+      restoredDraftLabel.value = ''
       isInitializing.value = false
       return
     }
@@ -420,10 +449,12 @@ export function useAssistant(options: UseAssistantOptions) {
     for (const p of loaded.events) {
       const evt = persistedToEvent(p)
       const list = map.get(p.turnId) ?? []
-      list.push(evt)
+      appendCoalescedEvent(list, evt)
       map.set(p.turnId, list)
     }
     eventsByTurn.value = map
+    streamingTurnId.value = [...loaded.turns].reverse().find((turn) => turn.status === 'streaming')?.id ?? null
+    isCanceling.value = false
 
     // 首次加载完成
     isInitializing.value = false
@@ -444,6 +475,10 @@ export function useAssistant(options: UseAssistantOptions) {
   // ==========================================================================
 
   async function createSession(title?: string): Promise<AssistantSession | null> {
+    if (isStreaming.value) {
+      lastError.value = '请先停止当前生成，再新建会话。'
+      return null
+    }
     const pid = options.projectId()
     if (!pid) return null
     const session = await A.sessionCreate({
@@ -458,15 +493,26 @@ export function useAssistant(options: UseAssistantOptions) {
   }
 
   async function switchSession(sessionId: string): Promise<void> {
+    if (isStreaming.value && sessionId !== activeSessionId.value) {
+      lastError.value = '请先停止当前生成，再切换会话。'
+      return
+    }
     activeSessionId.value = sessionId
     turns.value = []
     eventsByTurn.value = new Map()
     stagedChanges.value = []
     streamingTurnId.value = null
+    isCanceling.value = false
+    cancelEditing()
+    restoredDraftLabel.value = ''
     await Promise.all([reloadTurns(), reloadStaged()])
   }
 
   async function deleteSession(sessionId: string): Promise<void> {
+    if (isStreaming.value) {
+      lastError.value = '请先停止当前生成，再删除会话。'
+      return
+    }
     await A.sessionDelete({ sessionId })
     sessions.value = sessions.value.filter((s) => s.id !== sessionId)
     if (activeSessionId.value === sessionId) {
@@ -474,6 +520,8 @@ export function useAssistant(options: UseAssistantOptions) {
       turns.value = []
       eventsByTurn.value = new Map()
       stagedChanges.value = []
+      cancelEditing()
+      restoredDraftLabel.value = ''
       if (sessions.value.length > 0) {
         await switchSession(sessions.value[0].id)
       }
@@ -522,9 +570,15 @@ export function useAssistant(options: UseAssistantOptions) {
       }
     }
 
+    if (!await appStore.flushAppSettings()) {
+      lastError.value = appStore.persistenceError ?? 'AI 设置保存失败，未发送本次请求。'
+      return
+    }
+
     if (composerValue.value.trim() === trimmedText) {
       composerValue.value = ''
     }
+    restoredDraftLabel.value = ''
     lastError.value = null
 
     // 先乐观塞一个 streaming turn（真实 turnId 由后端事件确认）
@@ -541,10 +595,12 @@ export function useAssistant(options: UseAssistantOptions) {
       }
     ]
     streamingTurnId.value = optimisticTurnId
+    isCanceling.value = false
 
     try {
       const result = await A.turnSend({
         sessionId,
+        clientRequestId: optimisticTurnId,
         surface: options.surface,
         scopeRef: options.scopeRef?.(),
         userMessage: trimmedText,
@@ -556,11 +612,14 @@ export function useAssistant(options: UseAssistantOptions) {
       const optimisticStill = turns.value.find((t) => t.id === optimisticTurnId)
       if (optimisticStill) {
         turns.value = turns.value.filter((t) => t.id !== optimisticTurnId)
+        if (streamingTurnId.value === optimisticTurnId) streamingTurnId.value = null
       }
       if (result.error) lastError.value = result.error
     } catch (e) {
       streamingTurnId.value = null
+      isCanceling.value = false
       turns.value = turns.value.filter((t) => t.id !== optimisticTurnId)
+      if (!composerValue.value.trim()) composerValue.value = trimmedText
       lastError.value = e instanceof Error ? e.message : String(e)
     }
   }
@@ -576,17 +635,110 @@ export function useAssistant(options: UseAssistantOptions) {
   }
 
   async function cancel(): Promise<void> {
-    if (!streamingTurnId.value || !activeSessionId.value) return
-    // 乐观 turn 还没到后端，直接本地撤销
-    if (streamingTurnId.value.startsWith('optimistic-')) {
-      streamingTurnId.value = null
+    if (!streamingTurnId.value || !activeSessionId.value || isCanceling.value) return
+    isCanceling.value = true
+    try {
+      const result = await A.turnCancel({
+        sessionId: activeSessionId.value,
+        turnId: streamingTurnId.value
+      })
+      if (!result.ok) {
+        isCanceling.value = false
+        lastError.value = result.reason || '当前生成未能停止，请稍后重试。'
+      }
+    } catch (error) {
+      isCanceling.value = false
+      lastError.value = error instanceof Error ? error.message : '停止生成失败'
+    }
+  }
+
+  function startEditingTurn(turnId: string): void {
+    if (isStreaming.value || isTruncating.value) {
+      lastError.value = '请先停止当前生成，再编辑历史对话。'
       return
     }
-    await A.turnCancel({
-      sessionId: activeSessionId.value,
-      turnId: streamingTurnId.value
-    })
-    streamingTurnId.value = null
+    const turn = turns.value.find((item) => item.id === turnId)
+    if (!turn) return
+    editingTurnId.value = turnId
+    editingDraft.value = turn.userMessage
+    restoredDraftLabel.value = ''
+    lastError.value = null
+  }
+
+  function startEditingLastTurn(): void {
+    const last = turns.value[turns.value.length - 1]
+    if (last) startEditingTurn(last.id)
+  }
+
+  function updateEditingDraft(value: string): void {
+    editingDraft.value = value
+  }
+
+  function cancelEditing(): void {
+    editingTurnId.value = null
+    editingDraft.value = ''
+  }
+
+  function clearRestoredDraft(): void {
+    composerValue.value = ''
+    restoredDraftLabel.value = ''
+  }
+
+  async function truncateTurn(turnId: string): Promise<TurnTruncateResult | null> {
+    const sessionId = activeSessionId.value
+    if (!sessionId || isStreaming.value || isTruncating.value) {
+      if (isStreaming.value) lastError.value = '请先停止当前生成，再撤回或编辑历史对话。'
+      return null
+    }
+
+    isTruncating.value = true
+    try {
+      const result = await A.turnTruncate({ sessionId, fromTurnId: turnId })
+      const removed = new Set(result.removedTurnIds)
+      turns.value = turns.value.filter((turn) => !removed.has(turn.id))
+
+      const nextEvents = new Map(eventsByTurn.value)
+      for (const removedTurnId of removed) nextEvents.delete(removedTurnId)
+      eventsByTurn.value = nextEvents
+      stagedChanges.value = stagedChanges.value.filter((change) => !removed.has(change.turnId))
+      await reloadStaged()
+      lastError.value = null
+      return result
+    } catch (error) {
+      lastError.value = error instanceof Error ? error.message : '撤回对话失败'
+      return null
+    } finally {
+      isTruncating.value = false
+    }
+  }
+
+  async function undoTurn(turnId: string): Promise<TurnTruncateResult | null> {
+    const index = turns.value.findIndex((turn) => turn.id === turnId)
+    if (index < 0 || index !== turns.value.length - 1) {
+      lastError.value = '只能撤回最后一轮对话。'
+      return null
+    }
+    const result = await truncateTurn(turnId)
+    if (!result) return null
+    cancelEditing()
+    composerValue.value = result.restoredUserMessage
+    restoredDraftLabel.value = `已回填 · 撤回的第 ${index + 1} 轮原文`
+    return result
+  }
+
+  async function resendEditedTurn(
+    sendOptions: AssistantSendOptions = {}
+  ): Promise<TurnTruncateResult | null> {
+    const turnId = editingTurnId.value
+    const draft = editingDraft.value.trim()
+    if (!turnId || !draft) return null
+
+    const result = await truncateTurn(turnId)
+    if (!result) return null
+    cancelEditing()
+    composerValue.value = draft
+    void sendText(draft, sendOptions)
+    return result
   }
 
   // ==========================================================================
@@ -640,6 +792,12 @@ export function useAssistant(options: UseAssistantOptions) {
     () => options.projectId(),
     async () => {
       activeSessionId.value = null
+      turns.value = []
+      eventsByTurn.value = new Map()
+      stagedChanges.value = []
+      streamingTurnId.value = null
+      cancelEditing()
+      restoredDraftLabel.value = ''
       await reloadSessions()
     },
     { immediate: true }
@@ -652,6 +810,12 @@ export function useAssistant(options: UseAssistantOptions) {
       async (newRef, oldRef) => {
         if (newRef !== oldRef) {
           activeSessionId.value = null
+          turns.value = []
+          eventsByTurn.value = new Map()
+          stagedChanges.value = []
+          streamingTurnId.value = null
+          cancelEditing()
+          restoredDraftLabel.value = ''
           await reloadSessions()
         }
       }
@@ -665,12 +829,17 @@ export function useAssistant(options: UseAssistantOptions) {
     activeSession,
     messages,
     isStreaming,
+    isCanceling,
     isInitializing,
     streamingCharCount,
     stagedChanges,
     pendingStaged,
     acceptedStaged,
     composerValue,
+    editingTurnId,
+    editingDraft,
+    restoredDraftLabel,
+    isTruncating,
     lastError,
     // actions
     createSession,
@@ -680,6 +849,13 @@ export function useAssistant(options: UseAssistantOptions) {
     send,
     continueWithPrompt,
     cancel,
+    startEditingTurn,
+    startEditingLastTurn,
+    updateEditingDraft,
+    cancelEditing,
+    clearRestoredDraft,
+    undoTurn,
+    resendEditedTurn,
     acceptChanges,
     rejectChanges,
     commitAccepted,

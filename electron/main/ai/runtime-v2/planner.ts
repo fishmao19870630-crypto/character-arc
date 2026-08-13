@@ -13,6 +13,7 @@ export interface AssistantRuntimePlan {
   defaultReadLimit: number
   allowFullChapterRead: boolean
   allowFullProjectModuleRead: boolean
+  enforceToolBudgets: boolean
   requiresBatching: boolean
   continuationLabel: string
   continuationPrompt: string
@@ -65,7 +66,8 @@ export function createRuntimePlan(params: {
   request: TurnSendRequest
 }): AssistantRuntimePlan {
   const intent = resolveIntent(params.request, params.surface)
-  const requiresBatching = shouldBatch(params.request.userMessage, intent)
+  const enforceToolBudgets = params.surface.scope !== 'project'
+  const requiresBatching = enforceToolBudgets && shouldBatch(params.request.userMessage, intent)
   const isChapterSurface = params.surface.scope === 'chapter' || params.surface.scope === 'selection'
   const isEdit = intent === 'edit'
 
@@ -85,10 +87,11 @@ export function createRuntimePlan(params: {
     defaultReadLimit: requiresBatching ? 5 : 3,
     allowFullChapterRead: isEdit || params.surface.scope === 'selection',
     allowFullProjectModuleRead: false,
+    enforceToolBudgets,
     requiresBatching,
     continuationLabel: requiresBatching ? '继续分析下一批' : '继续补充证据',
     continuationPrompt: buildContinuationPrompt(intent),
-    guidance: buildGuidance(intent, requiresBatching) + vagueEditNote
+    guidance: buildGuidance(intent, requiresBatching, enforceToolBudgets) + vagueEditNote
   }
 }
 
@@ -164,15 +167,23 @@ function buildContinuationPrompt(intent: AssistantPlanIntent): string {
   }
 }
 
-function buildGuidance(intent: AssistantPlanIntent, requiresBatching: boolean): string {
-  const batch = requiresBatching
+function buildGuidance(
+  intent: AssistantPlanIntent,
+  requiresBatching: boolean,
+  enforceToolBudgets: boolean
+): string {
+  const executionMode = !enforceToolBudgets
+    ? '项目级助手不设置读取、搜索或暂存次数预算；请在当前请求内按需完成任务，证据充分后停止读取。'
+    : requiresBatching
     ? '本次按分批任务处理：先完成第一批证据读取与阶段结论，必要时提示用户继续下一批。'
     : '本次按轻量任务处理：证据足够后立即停止读取。'
   return [
-    batch,
+    executionMode,
     `识别意图：${intent}。`,
     '默认先读索引/摘要；只有目标明确且必须核对原文时才读全文。',
-    '每批读取预算有限，读完后必须总结已确认事实、证据来源和下一步缺口。',
+    enforceToolBudgets
+      ? '每批读取预算有限，读完后必须总结已确认事实、证据来源和下一步缺口。'
+      : '按需持续读取相关资料，完成后总结已确认事实、证据来源和仍存在的缺口。',
     intent === 'entity-edit'
       ? '实体设定修改任务：若目标实体和改动方向已在当前或最近对话中明确，不要继续列问题拖延；基于项目框架补足合理细节，给出2-3个可选方案，或在用户已选方向时直接调用对应 stage_* 产出暂存变更。用户说"根据已有框架给建议"时，只围绕上一轮目标实体给建议，不要转成全项目审计。'
       : ''

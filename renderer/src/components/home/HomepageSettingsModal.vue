@@ -37,13 +37,11 @@ const uiScaleOptions = [
   { label: '125%', value: 1.25 },
   { label: '140%', value: 1.4 }
 ]
-const aiTimeoutOptions = [
-  { label: '30 秒', value: 30 },
-  { label: '60 秒', value: 60 },
-  { label: '120 秒', value: 120 },
-  { label: '180 秒（默认）', value: 180 },
-  { label: '300 秒', value: 300 },
-  { label: '600 秒', value: 600 }
+const apiProtocolOptions = [
+  { label: '自动（按厂商模型目录）', value: 'auto' },
+  { label: 'OpenAI Responses', value: 'openai-responses' },
+  { label: 'Anthropic Messages', value: 'anthropic' },
+  { label: 'OpenAI Chat Completions', value: 'openai-chat' }
 ]
 
 const draftSettings = reactive<AppSettings>({
@@ -51,6 +49,7 @@ const draftSettings = reactive<AppSettings>({
   model: '',
   apiKey: '',
   baseUrl: '',
+  apiProtocol: 'auto',
   proxyUrl: '',
   temperature: undefined,
   topP: undefined,
@@ -135,6 +134,7 @@ function syncDraftFromStore(): void {
   draftSettings.model = appStore.appSettings.model
   draftSettings.apiKey = appStore.appSettings.apiKey
   draftSettings.baseUrl = appStore.appSettings.baseUrl
+  draftSettings.apiProtocol = appStore.appSettings.apiProtocol ?? 'auto'
   draftSettings.proxyUrl = appStore.appSettings.proxyUrl
   proxyTestIp.value = ''
   draftSettings.temperature = appStore.appSettings.temperature
@@ -217,13 +217,15 @@ function toOptionalNumber(value: number | null): number | undefined {
 
 function handleAddProfile(): void {
   const id = generateProfileId()
+  const defaults = resolveProviderDefaults('deepseek')
   const newProfile: AiProfile = {
     id,
-    name: generateUniqueName('新接口配置'),
-    provider: 'openai-compatible',
-    baseUrl: '',
+    name: generateUniqueName('DeepSeek'),
+    provider: 'deepseek',
+    baseUrl: defaults.baseUrl,
     apiKey: '',
-    model: '',
+    model: defaults.model,
+    apiProtocol: 'auto',
     temperature: undefined,
     topP: undefined
   }
@@ -243,6 +245,7 @@ function handleCopyProfile(): void {
     baseUrl: source.baseUrl,
     apiKey: source.apiKey,
     model: source.model,
+    apiProtocol: source.apiProtocol ?? 'auto',
     temperature: source.temperature,
     topP: source.topP
   }
@@ -276,6 +279,7 @@ function updateEditingProfile(updates: Partial<AiProfile>): void {
     if (updates.model !== undefined) draftSettings.model = updates.model
     if (updates.apiKey !== undefined) draftSettings.apiKey = updates.apiKey
     if (updates.baseUrl !== undefined) draftSettings.baseUrl = updates.baseUrl
+    if (updates.apiProtocol !== undefined) draftSettings.apiProtocol = updates.apiProtocol
     if ('temperature' in updates) draftSettings.temperature = updates.temperature
     if ('topP' in updates) draftSettings.topP = updates.topP
   }
@@ -286,7 +290,8 @@ function handleProviderChange(provider: string): void {
   updateEditingProfile({
     provider,
     model: defaults.model,
-    baseUrl: defaults.baseUrl
+    baseUrl: defaults.baseUrl,
+    apiProtocol: 'auto'
   })
   fetchedModels.value = []
 }
@@ -328,6 +333,7 @@ function buildProfilePayload(): AppSettings {
     model: profile.model,
     apiKey: profile.apiKey,
     baseUrl: profile.baseUrl,
+    apiProtocol: profile.apiProtocol ?? 'auto',
     temperature: profile.temperature,
     topP: profile.topP
   }
@@ -360,8 +366,10 @@ async function handleTestAiConnection(): Promise<void> {
     const payload = buildProfilePayload()
     const result = await window.characterArc.testAiConnection(toIpcPayload(payload))
     if (!result.success) throw new Error(result.error ?? '模型连接测试失败')
-    const res = result.result as { provider?: string; model?: string } | undefined
-    message.success(`模型连接成功：${res?.provider ?? payload.provider} / ${res?.model ?? payload.model}`)
+    const res = result.result as { provider?: string; model?: string; protocol?: string } | undefined
+    message.success(
+      `模型连接测试成功：${res?.provider ?? payload.provider} / ${res?.model ?? payload.model} / ${res?.protocol ?? 'auto'}`
+    )
   } catch (error) {
     message.error(error instanceof Error ? error.message : '模型连接测试失败')
   } finally {
@@ -370,39 +378,23 @@ async function handleTestAiConnection(): Promise<void> {
 }
 
 async function saveSettings(): Promise<void> {
-  appStore.updateAppSetting('aiProfiles', draftSettings.aiProfiles.map((profile) => ({ ...profile })))
-  appStore.updateAppSetting('activeAiProfileId', draftSettings.activeAiProfileId)
-
   const activeProfile = draftSettings.aiProfiles.find(p => p.id === draftSettings.activeAiProfileId)
-  if (activeProfile) {
-    appStore.updateAppSetting('provider', activeProfile.provider)
-    appStore.updateAppSetting('model', activeProfile.model)
-    appStore.updateAppSetting('apiKey', activeProfile.apiKey)
-    appStore.updateAppSetting('baseUrl', activeProfile.baseUrl)
-    appStore.updateAppSetting('temperature', activeProfile.temperature)
-    appStore.updateAppSetting('topP', activeProfile.topP)
+  const nextSettings: AppSettings = {
+    ...draftSettings,
+    aiProfiles: draftSettings.aiProfiles.map((profile) => ({ ...profile })),
+    activeAiProfileId: draftSettings.activeAiProfileId,
+    provider: activeProfile?.provider ?? draftSettings.provider,
+    model: activeProfile?.model ?? draftSettings.model,
+    apiKey: activeProfile?.apiKey ?? draftSettings.apiKey,
+    baseUrl: activeProfile?.baseUrl ?? draftSettings.baseUrl,
+    apiProtocol: activeProfile?.apiProtocol ?? draftSettings.apiProtocol ?? 'auto',
+    temperature: activeProfile?.temperature ?? draftSettings.temperature,
+    topP: activeProfile?.topP ?? draftSettings.topP
   }
 
-  appStore.updateAppSetting('proxyUrl', draftSettings.proxyUrl)
-
-  appStore.updateAppSetting('imageProvider', draftSettings.imageProvider)
-  appStore.updateAppSetting('imageModel', draftSettings.imageModel)
-  appStore.updateAppSetting('imageApiKey', draftSettings.imageApiKey)
-  appStore.updateAppSetting('imageBaseUrl', draftSettings.imageBaseUrl)
-  appStore.updateAppSetting('autoSaveInterval', draftSettings.autoSaveInterval)
-  appStore.updateAppSetting('editorFont', draftSettings.editorFont)
-  appStore.updateAppSetting('uiScale', draftSettings.uiScale)
-  appStore.updateAppSetting('darkMode', draftSettings.darkMode)
-  appStore.updateAppSetting('darkModeStyle', draftSettings.darkModeStyle)
-  appStore.updateAppSetting('aiTimeoutSeconds', draftSettings.aiTimeoutSeconds)
-
-  if (draftTheme.value !== appStore.theme) {
-    appStore.setTheme(draftTheme.value)
-  }
-
-  await appStore.persistWorkspace()
-  if (appStore.persistenceError) {
-    message.error(appStore.persistenceError)
+  const saved = await appStore.saveAppSettingsDraft(nextSettings, draftTheme.value)
+  if (!saved) {
+    message.error(appStore.persistenceError ?? '设置保存失败')
     return
   }
 
@@ -490,31 +482,33 @@ async function saveSettings(): Promise<void> {
               </n-form-item>
             </div>
             <div class="settings-grid">
-              <n-form-item label="协议类型">
+              <n-form-item label="模型厂商">
                 <n-select
                   :options="providerOptions"
                   :value="editingProfile.provider"
+                  filterable
+                  placeholder="搜索或选择模型厂商"
                   @update:value="(value) => handleProviderChange(value ?? 'openai-compatible')"
                 />
               </n-form-item>
-              <n-form-item label="Base URL">
-                <n-input
-                  :value="editingProfile.baseUrl"
-                  :placeholder="editingProfile.provider === 'anthropic' ? '例如：https://api.anthropic.com（自动补 /v1）' : '例如：https://api.deepseek.com/v1'"
-                  @update:value="(value) => updateEditingProfile({ baseUrl: value })"
-                />
-              </n-form-item>
-            </div>
-            <div class="settings-grid">
               <n-form-item label="API Key">
                 <n-input
                   type="password"
                   show-password-on="click"
                   :value="editingProfile.apiKey"
-                  placeholder="填写接口对应的 API Key / Token"
+                  :placeholder="editingProfile.provider === 'ollama' ? '本地服务无需填写' : '填写厂商提供的 API Key / Token'"
                   @update:value="(value) => updateEditingProfile({ apiKey: value })"
                 />
               </n-form-item>
+            </div>
+            <n-form-item v-if="activeProviderPreset.customBaseUrl" label="Base URL">
+              <n-input
+                :value="editingProfile.baseUrl"
+                placeholder="填写完整 API Base URL，例如：https://example.com/v1"
+                @update:value="(value) => updateEditingProfile({ baseUrl: value })"
+              />
+            </n-form-item>
+            <div>
               <n-form-item label="模型名称">
                 <div class="model-input-row">
                   <n-select
@@ -529,13 +523,14 @@ async function saveSettings(): Promise<void> {
                   <n-input
                     v-else
                     :value="editingProfile.model"
-                    placeholder="填写 URL 和 Key 后可点右侧按钮拉取"
+                    placeholder="填写 Key 后可点右侧按钮拉取或手动输入"
                     @update:value="(value) => updateEditingProfile({ model: value })"
                   />
                   <n-button
                     quaternary
                     class="model-fetch-btn"
-                    :disabled="isFetchingModels || !editingProfile.baseUrl.trim()"
+                    title="获取模型列表"
+                    :disabled="isFetchingModels || !editingProfile.baseUrl.trim() || (editingProfile.provider !== 'ollama' && !editingProfile.apiKey.trim())"
                     @click="handleFetchModels"
                   >
                     <template #icon>
@@ -552,6 +547,13 @@ async function saveSettings(): Promise<void> {
             <details class="advanced-settings">
               <summary>API 高级设置</summary>
               <div class="advanced-settings-body">
+                <n-form-item label="API 协议">
+                  <n-select
+                    :options="apiProtocolOptions"
+                    :value="editingProfile.apiProtocol ?? 'auto'"
+                    @update:value="(value) => updateEditingProfile({ apiProtocol: value ?? 'auto' })"
+                  />
+                </n-form-item>
                 <div class="settings-grid">
                   <n-form-item label="Temperature">
                     <n-input-number
@@ -744,18 +746,6 @@ async function saveSettings(): Promise<void> {
                 :value="draftSettings.uiScale"
                 @update:value="(value) => { draftSettings.uiScale = value ?? 1 }"
               />
-            </n-form-item>
-          </div>
-          <div class="settings-grid">
-            <n-form-item label="AI 请求超时时间">
-              <div class="preset-field">
-                <n-select
-                  :options="aiTimeoutOptions"
-                  :value="draftSettings.aiTimeoutSeconds"
-                  @update:value="(value) => { draftSettings.aiTimeoutSeconds = value ?? 180 }"
-                />
-                <span class="preset-hint">超时后会主动终止本次请求，适当增大可避免慢模型被误中断。</span>
-              </div>
             </n-form-item>
           </div>
           <div class="dark-mode-row">

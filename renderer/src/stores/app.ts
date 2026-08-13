@@ -17,7 +17,7 @@ import {
   type OutlineDropPosition
 } from '@/features/workspace/outlineReorder'
 import { getThemePreset } from '@/theme/presets'
-import { createEmptyWorkspace, normalizeGlobalAssistantProposal, mergeGlobalAssistantProposals } from '@/features/workspace/projectWorkspace'
+import { createEmptyWorkspace, normalizeGlobalAssistantProposal, mergeGlobalAssistantProposals, normalizeOutlineReferenceIds } from '@/features/workspace/projectWorkspace'
 import { createWorkspacePersistence } from '@/features/workspace/persistence'
 import {
   filterKnowledgeDocumentsForProject,
@@ -30,6 +30,7 @@ import {
   buildWorkspaceMapFromLegacy,
   defaultProjects,
   loadStoredState,
+  normalizeAiRuns,
   normalizeAppSettings,
   normalizeChapterAssistantTemplates,
   normalizeProjectSummary,
@@ -218,6 +219,8 @@ export const useAppStore = defineStore('app', () => {
   const projects = ref<ProjectSummary[]>(stored.projects)
   /** 项目 ID → 工作区数据 的映射表 */
   const projectWorkspaces = ref<Record<string, ProjectWorkspaceData>>(stored.workspaces)
+  /** 应用级 AI 调用历史；projectId 仅作为可选关联信息。 */
+  const globalAiRuns = ref<AiRunRecord[]>(normalizeAiRuns(stored.aiRuns))
   /** 应用全局设置（AI 供应商、模型、自动保存等） */
   const appSettings = ref<AppSettings>(stored.appSettings)
   const coverWorkbenchHistory = ref<import('@/types/app').CoverWorkbenchHistoryItem[]>(stored.coverWorkbenchHistory ?? [])
@@ -238,10 +241,12 @@ export const useAppStore = defineStore('app', () => {
 
   const {
     scheduledPersistAt,
+    isPersisting,
     persistenceError,
     scheduleWorkspaceSync,
     flushWorkspaceSync,
     persistWorkspace,
+    persistAppSettings,
     schedulePersist,
     scheduleSettingsPersist,
     handleRemoteWorkspaceSync
@@ -308,21 +313,14 @@ export const useAppStore = defineStore('app', () => {
   )
   /** 全局拆书库参考作品（跨项目共享） */
   const referenceWorks = ref<ReferenceWorkItem[]>(stored.referenceWorks ?? [])
-  /** 当前项目的 AI 运行记录列表 */
-  const aiRuns = computed(() => currentWorkspace.value.aiRuns)
+  /** 当前项目关联的 AI 运行记录列表 */
+  const aiRuns = computed(() => globalAiRuns.value.filter((run) => run.projectId === selectedProjectId.value))
   /**
-   * 跨项目聚合的全部 AI 运行记录，按开始时间降序。
-   * AI 调用日志面板用它展示所有项目（含单次任务）的历史，而非仅当前项目。
+   * 应用级全部 AI 运行记录，按开始时间降序；不要求记录属于某个项目。
    */
-  const allAiRuns = computed(() => {
-    const runs: AiRunRecord[] = []
-    for (const [projectId, workspace] of Object.entries(projectWorkspaces.value)) {
-      if (Array.isArray(workspace.aiRuns)) {
-        runs.push(...workspace.aiRuns.map(run => ({ ...run, projectId: run.projectId || projectId })))
-      }
-    }
-    return runs.sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''))
-  })
+  const allAiRuns = computed(() =>
+    [...globalAiRuns.value].sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''))
+  )
   /**
    * 全局 AI 任务注册表（按 key 去重，响应式）。
    *
@@ -345,7 +343,7 @@ export const useAppStore = defineStore('app', () => {
   /** 是否为实时自动保存模式 */
   const isLiveAutoSave = computed(() => isLiveAutoSaveInterval(appSettings.value.autoSaveInterval))
   /** 是否有待持久化的更改 */
-  const isPersistencePending = computed(() => scheduledPersistAt.value !== null)
+  const isPersistencePending = computed(() => scheduledPersistAt.value !== null || isPersisting.value)
   /** 当前选中的章节对象 */
   const selectedChapter = computed(
     () => chapters.value.find((chapter) => chapter.id === selectedChapterId.value) ?? chapters.value[0]
@@ -384,12 +382,9 @@ export const useAppStore = defineStore('app', () => {
       return
     }
 
-    // 项目级 AI 历史：单次任务（如角色生成、大纲扩写）的 context 常不带 projectId，
-    // 导致 meta.projectId 为空。这里用当前选中项目兜底，确保所有任务都能落进日志。
-    const runProjectId = payload.projectId || selectedProjectId.value
-    if (runProjectId) {
-      appendAiRun(runProjectId, payload.meta)
-    }
+    // AI 历史是应用级数据；projectId 为空也必须记录，不能回退并误绑当前项目。
+    const runProjectId = payload.projectId || ''
+    appendAiRun(runProjectId, payload.meta)
 
     // agent loop 通过 knowledge_save_document 工具落库的文档：随 ai-run-event 一起回灌
     const produced = (payload.meta as { producedKnowledgeDocuments?: Array<Partial<KnowledgeDocument>> }).producedKnowledgeDocuments
@@ -615,6 +610,21 @@ export const useAppStore = defineStore('app', () => {
     referenceWorks.value = Array.isArray((payload as Partial<StoredState>).referenceWorks)
       ? (payload as Partial<StoredState>).referenceWorks!
       : []
+    const workspaceAiRuns = Object.entries(projectWorkspaces.value).flatMap(([projectId, workspace]) =>
+      (workspace.aiRuns ?? []).map((run) => ({ ...run, projectId: run.projectId || projectId }))
+    )
+    const payloadAiRuns = Array.isArray((payload as Partial<StoredState>).aiRuns)
+      ? (payload as Partial<StoredState>).aiRuns!
+      : []
+    globalAiRuns.value = normalizeAiRuns(
+      Array.from(new Map([...workspaceAiRuns, ...payloadAiRuns].map((run) => [run.id, run])).values())
+    )
+    projectWorkspaces.value = Object.fromEntries(
+      Object.entries(projectWorkspaces.value).map(([projectId, workspace]) => [
+        projectId,
+        { ...workspace, aiRuns: [] }
+      ])
+    )
     syncSelectedChapter()
   }
 
@@ -627,6 +637,7 @@ export const useAppStore = defineStore('app', () => {
       workspaces: toSerializable(projectWorkspaces.value),
       knowledgeDocuments: toSerializable(allKnowledgeDocuments.value),
       referenceWorks: toSerializable(referenceWorks.value),
+      aiRuns: toSerializable(globalAiRuns.value),
       appSettings: toSerializable(appSettings.value),
       coverWorkbenchHistory: toSerializable(coverWorkbenchHistory.value)
     }
@@ -932,7 +943,7 @@ export const useAppStore = defineStore('app', () => {
   /** 切换主题并触发快速持久化 */
   function setTheme(nextTheme: ThemeName): void {
     theme.value = nextTheme
-    schedulePersist('fast')
+    scheduleSettingsPersist({ flushWorkspace: false })
   }
 
   /** 进入章节写作页面 */
@@ -1043,9 +1054,14 @@ export const useAppStore = defineStore('app', () => {
   }
 
   // ── 项目 CRUD ──
+  /** 为尚未完成生成的项目预留稳定 ID，使生成期间的 AI 运行记录可归档到目标项目。 */
+  function reserveProjectId(): string {
+    return uniqueId('project')
+  }
+
   /** 从向导创建完整项目工作区：分配 ID、设置默认分卷和章节、切换到工作台 */
-  function createProjectWorkspace(payload: ProjectWorkspacePayload): string {
-    const projectId = uniqueId('project')
+  function createProjectWorkspace(payload: ProjectWorkspacePayload, requestedProjectId?: string): string {
+    const projectId = requestedProjectId?.trim() || uniqueId('project')
     const nextVolumes = payload.outlineVolumes?.length ? payload.outlineVolumes : [createWorkspaceVolume()]
     const nextChapters = payload.chapters?.length ? payload.chapters : [buildStarterChapter(nextVolumes[0].id)]
     const computedWordCount = formatProjectWordCount(nextChapters)
@@ -1304,28 +1320,22 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function appendAiRun(projectId: string, record: Omit<AiRunRecord, 'projectId'>): void {
-    if (!projectId.trim()) {
-      return
-    }
-
-    updateProjectWorkspace(projectId, (workspace) => ({
-      ...workspace,
-      aiRuns: [
-        ...(workspace.aiRuns ?? []),
-        {
-          ...record,
-          projectId,
-          usage: record.usage && typeof record.usage === 'object'
-            ? {
+    globalAiRuns.value = [
+      ...globalAiRuns.value,
+      {
+        ...record,
+        projectId: projectId.trim(),
+        usage: record.usage && typeof record.usage === 'object'
+          ? {
                 promptTokens: Number.isFinite(record.usage.promptTokens) ? Math.max(0, Number(record.usage.promptTokens)) : undefined,
                 completionTokens: Number.isFinite(record.usage.completionTokens) ? Math.max(0, Number(record.usage.completionTokens)) : undefined,
                 totalTokens: Number.isFinite(record.usage.totalTokens) ? Math.max(0, Number(record.usage.totalTokens)) : undefined,
                 reasoningTokens: Number.isFinite(record.usage.reasoningTokens) ? Math.max(0, Number(record.usage.reasoningTokens)) : undefined,
                 cachedInputTokens: Number.isFinite(record.usage.cachedInputTokens) ? Math.max(0, Number(record.usage.cachedInputTokens)) : undefined
-              }
-            : undefined,
-          usedKnowledge: Array.isArray(record.usedKnowledge)
-            ? record.usedKnowledge.map((item) => {
+            }
+          : undefined,
+        usedKnowledge: Array.isArray(record.usedKnowledge)
+          ? record.usedKnowledge.map((item) => {
                 const sourceType: AiRunRecord['usedKnowledge'][number]['sourceType'] =
                   item.sourceType === 'reference-summary'
                   || item.sourceType === 'workflow-document'
@@ -1344,20 +1354,19 @@ export const useAppStore = defineStore('app', () => {
                     ? item.keywords.map((keyword) => String(keyword).trim()).filter(Boolean).slice(0, 8)
                     : []
                 }
-              })
-            : [],
-          toolCalls: Array.isArray(record.toolCalls)
-            ? record.toolCalls.map((item) => ({
+            })
+          : [],
+        toolCalls: Array.isArray(record.toolCalls)
+          ? record.toolCalls.map((item) => ({
                 tool: String(item.tool ?? '').trim(),
                 args: item.args && typeof item.args === 'object' ? item.args as Record<string, unknown> : {},
                 durationMs: Number.isFinite(item.durationMs) ? Math.max(0, Number(item.durationMs)) : 0,
                 status: (item.status === 'error' ? 'error' : 'ok') as 'ok' | 'error',
                 error: String(item.error ?? '').trim() || undefined
-              }))
-            : undefined
-        }
-      ].slice(-200)
-    }))
+            }))
+          : undefined
+      }
+    ].slice(-200)
     schedulePersist('fast')
   }
 
@@ -1483,28 +1492,31 @@ export const useAppStore = defineStore('app', () => {
   }
 
   // ── 角色 CRUD ──
-  /** 创建新角色卡，插入到列表头部 */
+  /** 创建新角色卡，追加到列表末尾，保持旧角色优先展示 */
   function createCharacter(payload?: Partial<CharacterCard>): string {
     const characterId = uniqueId('char')
-    updateCurrentWorkspace((workspace) => ({
-      ...workspace,
-      characters: [
-        {
-          id: characterId,
-          name: payload?.name?.trim() || `新角色 ${workspace.characters.length + 1}`,
-          role: payload?.role?.trim() || '待设定',
-          avatar: payload?.avatar || 'linear-gradient(135deg, #9be15d 0%, #00e3ae 100%)',
-          description:
-            payload?.description?.trim() ||
-            '这是一名新加入项目的角色草稿。你可以继续补充身份、背景、动机与冲突。',
-          tags:
-            payload?.tags?.length
-              ? payload.tags
-              : [{ label: '待完善', tone: 'warning' }]
-        },
-        ...workspace.characters
-      ]
-    }))
+    updateCurrentWorkspace((workspace) => {
+      const character: CharacterCard = {
+        id: characterId,
+        name: payload?.name?.trim() || `新角色 ${workspace.characters.length + 1}`,
+        role: payload?.role?.trim() || '待设定',
+        avatar: payload?.avatar || 'linear-gradient(135deg, #9be15d 0%, #00e3ae 100%)',
+        description:
+          payload?.description?.trim() ||
+          '这是一名新加入项目的角色草稿。你可以继续补充身份、背景、动机与冲突。',
+        tags:
+          payload?.tags?.length
+            ? payload.tags
+            : [{ label: '待完善', tone: 'warning' }]
+      }
+      return {
+        ...workspace,
+        characters: [
+          ...workspace.characters,
+          character
+        ]
+      }
+    })
     schedulePersist('fast')
     return characterId
   }
@@ -2141,6 +2153,9 @@ export const useAppStore = defineStore('app', () => {
         summary:
           payload?.summary?.trim() ||
           '这里是新的剧情大纲节点草稿，可以继续补充剧情推进、角色目标和关键转折。',
+        relatedCharacterIds: normalizeOutlineReferenceIds(payload?.relatedCharacterIds),
+        relatedOrganizationIds: normalizeOutlineReferenceIds(payload?.relatedOrganizationIds),
+        relatedWorldviewIds: normalizeOutlineReferenceIds(payload?.relatedWorldviewIds),
         status: payload?.status || 'planned',
         sortOrder: payload?.sortOrder ?? workspace.outlineItems.length
       }
@@ -2175,6 +2190,9 @@ export const useAppStore = defineStore('app', () => {
         summary:
           payload.summary?.trim() ||
           '这里是新的剧情大纲节点草稿，可以继续补充剧情推进、角色目标和关键转折。',
+        relatedCharacterIds: normalizeOutlineReferenceIds(payload.relatedCharacterIds),
+        relatedOrganizationIds: normalizeOutlineReferenceIds(payload.relatedOrganizationIds),
+        relatedWorldviewIds: normalizeOutlineReferenceIds(payload.relatedWorldviewIds),
         status: payload.status || 'planned',
         sortOrder: anchorIndex + index + 1
       }))
@@ -2254,6 +2272,9 @@ export const useAppStore = defineStore('app', () => {
             wordTarget: entry.item.wordTarget?.trim() || existing.wordTarget,
             conflict: entry.item.conflict?.trim() || existing.conflict,
             summary: entry.item.summary?.trim() || existing.summary,
+            relatedCharacterIds: normalizeOutlineReferenceIds(entry.item.relatedCharacterIds ?? existing.relatedCharacterIds),
+            relatedOrganizationIds: normalizeOutlineReferenceIds(entry.item.relatedOrganizationIds ?? existing.relatedOrganizationIds),
+            relatedWorldviewIds: normalizeOutlineReferenceIds(entry.item.relatedWorldviewIds ?? existing.relatedWorldviewIds),
             status: entry.item.status || existing.status
           }
           result.overwritten += 1
@@ -2281,6 +2302,9 @@ export const useAppStore = defineStore('app', () => {
             wordTarget: entry.item.wordTarget?.trim() || '3000',
             conflict: entry.item.conflict?.trim() || '待补充核心冲突',
             summary: entry.item.summary?.trim() || '待补充剧情摘要',
+            relatedCharacterIds: normalizeOutlineReferenceIds(entry.item.relatedCharacterIds),
+            relatedOrganizationIds: normalizeOutlineReferenceIds(entry.item.relatedOrganizationIds),
+            relatedWorldviewIds: normalizeOutlineReferenceIds(entry.item.relatedWorldviewIds),
             status: entry.item.status || 'planned',
             sortOrder: 0
           },
@@ -2344,6 +2368,9 @@ export const useAppStore = defineStore('app', () => {
         wordTarget: payload.wordTarget?.trim() || currentItem.wordTarget,
         conflict: payload.conflict?.trim() || currentItem.conflict,
         summary: payload.summary?.trim() || currentItem.summary,
+        relatedCharacterIds: normalizeOutlineReferenceIds(payload.relatedCharacterIds ?? currentItem.relatedCharacterIds),
+        relatedOrganizationIds: normalizeOutlineReferenceIds(payload.relatedOrganizationIds ?? currentItem.relatedOrganizationIds),
+        relatedWorldviewIds: normalizeOutlineReferenceIds(payload.relatedWorldviewIds ?? currentItem.relatedWorldviewIds),
         status: payload.status || currentItem.status
       }
 
@@ -2644,6 +2671,18 @@ export const useAppStore = defineStore('app', () => {
     scheduleSettingsPersist(options)
   }
 
+  async function saveAppSettingsDraft(nextSettings: AppSettings, nextTheme: ThemeName = theme.value): Promise<boolean> {
+    theme.value = nextTheme
+    appSettings.value = normalizeAppSettings(nextSettings)
+    await persistAppSettings()
+    return !persistenceError.value
+  }
+
+  async function flushAppSettings(): Promise<boolean> {
+    await persistAppSettings()
+    return !persistenceError.value
+  }
+
   function switchAiProfile(profileId: string): void {
     const profile = appSettings.value.aiProfiles.find(p => p.id === profileId)
     if (!profile) return
@@ -2652,6 +2691,7 @@ export const useAppStore = defineStore('app', () => {
     appSettings.value.model = profile.model
     appSettings.value.apiKey = profile.apiKey
     appSettings.value.baseUrl = profile.baseUrl
+    appSettings.value.apiProtocol = profile.apiProtocol ?? 'auto'
     appSettings.value.temperature = profile.temperature
     appSettings.value.topP = profile.topP
     scheduleSettingsPersist({ flushWorkspace: false })
@@ -2684,6 +2724,7 @@ export const useAppStore = defineStore('app', () => {
       if (updates.model !== undefined) appSettings.value.model = updates.model
       if (updates.apiKey !== undefined) appSettings.value.apiKey = updates.apiKey
       if (updates.baseUrl !== undefined) appSettings.value.baseUrl = updates.baseUrl
+      if (updates.apiProtocol !== undefined) appSettings.value.apiProtocol = updates.apiProtocol
       if ('temperature' in updates) appSettings.value.temperature = updates.temperature
       if ('topP' in updates) appSettings.value.topP = updates.topP
     }
@@ -3124,7 +3165,7 @@ export const useAppStore = defineStore('app', () => {
    * - 无论 executor 抛异常还是成功返回，任务都会被标记为结束并在短暂保留后自动清理。
    * - 返回值是 executor 的返回值，方便调用方继续处理结果。
    * - 自动生成 `clientTaskId` 并注入到 executor 的闭包上下文中（通过 `getClientTaskId()`）。
-   * - 默认 90s 超时；超时后自动通知主进程 abort 并标记任务失败。
+   * - 不按运行时长自动取消；网络错误、协议错误或用户手动取消时结束。
    *
    * @throws 保留 executor 原始错误抛出，让上层可以 try/catch 常规处理。
    */
@@ -3148,38 +3189,15 @@ export const useAppStore = defineStore('app', () => {
       next.set(input.key, run)
     })
 
-    // 超时控制：优先使用任务级覆盖，其次读取用户配置
-    const timeoutMs = input.timeoutMs ?? (appSettings.value.aiTimeoutSeconds * 1000)
-    let timeoutHandle: number | null = null
-    let timedOut = false
-
-    const timeoutPromise = timeoutMs > 0
-      ? new Promise<never>((_, reject) => {
-          timeoutHandle = window.setTimeout(() => {
-            timedOut = true
-            // 通知主进程 abort
-            window.characterArc.cancelAiTask(clientTaskId).catch(() => {})
-            reject(new Error(`AI 任务超时（${Math.round(timeoutMs / 1000)}s），已自动取消。`))
-          }, timeoutMs)
-        })
-      : null
-
     try {
-      const result = timeoutPromise
-        ? await Promise.race([executor(), timeoutPromise])
-        : await executor()
+      const result = await executor()
       finalizeAiTask(input.key, 'done')
       return result
     } catch (error) {
-      const msg = timedOut
-        ? `AI 任务超时（${Math.round(timeoutMs / 1000)}s），已自动取消。`
-        : (error instanceof Error ? error.message : String(error))
+      const msg = error instanceof Error ? error.message : String(error)
       finalizeAiTask(input.key, 'error', msg)
       throw error
     } finally {
-      if (timeoutHandle !== null) {
-        window.clearTimeout(timeoutHandle)
-      }
       currentClientTaskId = null
     }
   }
@@ -3311,6 +3329,7 @@ export const useAppStore = defineStore('app', () => {
     closeWizard,
     createProject,
     createProjectWorkspace,
+    reserveProjectId,
     createCharacter,
     createCharacterRelationship,
     createInspirationEntry,
@@ -3334,6 +3353,7 @@ export const useAppStore = defineStore('app', () => {
     hasHydrated,
     initialize,
     isLiveAutoSave,
+    isPersisting,
     isPersistencePending,
     deleteChapter,
     deleteCharacter,
@@ -3394,6 +3414,8 @@ export const useAppStore = defineStore('app', () => {
     setTheme,
     theme,
     updateAppSetting,
+    saveAppSettingsDraft,
+    flushAppSettings,
     switchAiProfile,
     updateActiveAiProfileModel,
     addAiProfile,

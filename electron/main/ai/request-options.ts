@@ -1,8 +1,11 @@
 import type { AppSettings } from './shared-types'
 
-export type OpenAIProviderOptions = {
-  openai: {
+export type AiProviderOptions = {
+  openai?: {
     reasoningEffort: 'none'
+  }
+  openaiCompatible?: {
+    reasoningEffort: 'low'
   }
 }
 
@@ -13,8 +16,19 @@ export function isOpenAIReasoningChatModel(settings: AppSettings): boolean {
 
 export function resolveProviderOptions(
   settings: AppSettings,
-  options?: { disableReasoning?: boolean }
-): OpenAIProviderOptions | undefined {
+  options?: { disableReasoning?: boolean; preferLowReasoning?: boolean }
+): AiProviderOptions | undefined {
+  if (
+    options?.preferLowReasoning
+    && isOpenCodeReasoningChatModel(settings)
+  ) {
+    return {
+      openaiCompatible: {
+        reasoningEffort: 'low'
+      }
+    }
+  }
+
   if (
     !options?.disableReasoning
     || settings.provider !== 'openai'
@@ -28,4 +42,15 @@ export function resolveProviderOptions(
       reasoningEffort: 'none'
     }
   }
+}
+
+export function isOpenCodeReasoningChatModel(settings: AppSettings): boolean {
+  const provider = settings.provider.trim().toLowerCase()
+  if (provider !== 'opencode-zen' && provider !== 'opencode-go') {
+    return false
+  }
+
+  const model = settings.model?.trim().toLowerCase() || ''
+  if (/^(claude-|qwen3(?:[.-]|$)|gpt-|grok-)/.test(model)) return false
+  return /^(deepseek-v4|minimax-|mimo-|glm-|kimi-|nemotron-)/.test(model)
 }

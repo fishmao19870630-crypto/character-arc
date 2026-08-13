@@ -1,6 +1,7 @@
 /** 螺旋 seed 阶段生成的主角设定 */
 export interface SpiralProtagonist {
   name: string
+  tags: string[]
   coreDesire: string
   coreFlaw: string
   innerConflict: string
@@ -31,8 +32,27 @@ export interface SpiralSeedResult {
 export interface SpiralSupportingCharacter {
   name: string
   role: string
+  tags: string[]
   relationToProtagonist: string
   motivation: string
+}
+
+/** 螺旋展开阶段生成的组织/势力及其成员归属 */
+export interface SpiralOrganization {
+  name: string
+  type: string
+  description: string
+  motto: string
+  members: Array<{ characterName: string; role: string; notes: string }>
+}
+
+/** 螺旋展开阶段生成的人物关系 */
+export interface SpiralCharacterRelationship {
+  fromCharacter: string
+  toCharacter: string
+  type: string
+  description: string
+  intensity: number
 }
 
 /** 螺旋 expand 阶段生成的大纲节拍 */
@@ -42,11 +62,16 @@ export interface SpiralOutlineBeat {
   characterDriven: string
   summary: string
   wordTarget: string
+  relatedCharacters: string[]
+  relatedOrganizations: string[]
+  relatedWorldview: string[]
 }
 
 /** expand（第二圈）的输出结果 */
 export interface SpiralExpandResult {
   supportingCharacters: SpiralSupportingCharacter[]
+  organizations: SpiralOrganization[]
+  relationships: SpiralCharacterRelationship[]
   outlineBeats: SpiralOutlineBeat[]
   expandedWorldview: SpiralWorldRule[]
 }

@@ -15,7 +15,10 @@ const outlineItemSchema = z.object({
   title: stringField,
   wordTarget: stringField,
   conflict: stringField,
-  summary: stringField
+  summary: stringField,
+  relatedCharacterIds: stringList.optional(),
+  relatedOrganizationIds: stringList.optional(),
+  relatedWorldviewIds: stringList.optional()
 })
 
 const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
@@ -33,6 +36,9 @@ const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
       targetAudience: stringField,
       outline: stringList
     }))
+  }),
+  'premise-enhance': z.object({
+    premise: stringField
   }),
   'assistant-intent': z.object({
     intent: z.enum(['chat', 'proposal']),
@@ -120,7 +126,10 @@ const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
       wordTarget: stringField.optional(),
       conflict: stringField.optional(),
       summary: stringField.optional(),
-      volumeId: stringField.optional()
+      volumeId: stringField.optional(),
+      relatedCharacterIds: stringList.optional(),
+      relatedOrganizationIds: stringList.optional(),
+      relatedWorldviewIds: stringList.optional()
     })),
     notes: stringList
   }),
@@ -147,6 +156,13 @@ const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
       endingChanges: stringList,
       doNotDo: stringList,
       emotionArc: stringField
+    })
+  }),
+  'chapter-session-note': z.object({
+    sessionNote: z.object({
+      craftDecisions: stringField,
+      effectiveReferences: stringField,
+      nextChapterAdvice: stringField
     })
   }),
   'chapter-scene-plan': z.object({
@@ -287,6 +303,7 @@ const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
   'spiral-seed': z.object({
     protagonist: z.object({
       name: stringField,
+      tags: stringList,
       coreDesire: stringField,
       coreFlaw: stringField,
       innerConflict: stringField
@@ -302,17 +319,85 @@ const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
     supportingCharacters: z.array(z.object({
       name: stringField,
       role: stringField,
+      tags: stringList,
       relationToProtagonist: stringField,
       motivation: stringField
+    })),
+    organizations: z.array(z.object({
+      name: stringField,
+      type: stringField,
+      description: stringField,
+      motto: stringField,
+      members: z.array(z.object({
+        characterName: stringField,
+        role: stringField,
+        notes: stringField
+      }))
+    })),
+    relationships: z.array(z.object({
+      fromCharacter: stringField,
+      toCharacter: stringField,
+      type: stringField,
+      description: stringField,
+      intensity: z.number().min(0).max(100)
     })),
     outlineBeats: z.array(z.object({
       title: stringField,
       conflict: stringField,
       characterDriven: stringField,
       summary: stringField,
-      wordTarget: stringField
+      wordTarget: stringField,
+      relatedCharacters: stringList,
+      relatedOrganizations: stringList,
+      relatedWorldview: stringList
     })),
     expandedWorldview: z.array(worldviewEntrySchema)
+  }),
+  'spiral-characters': z.object({
+    supportingCharacters: z.array(z.object({
+      name: stringField,
+      role: stringField,
+      tags: stringList.min(3).max(5),
+      relationToProtagonist: stringField,
+      motivation: stringField
+    })).min(6).max(8)
+  }),
+  'spiral-organizations': z.object({
+    organizations: z.array(z.object({
+      name: stringField,
+      type: stringField,
+      description: stringField,
+      motto: stringField,
+      members: z.array(z.object({
+        characterName: stringField,
+        role: stringField,
+        notes: stringField
+      })).min(2).max(8)
+    })).min(3).max(5)
+  }),
+  'spiral-relationships': z.object({
+    relationships: z.array(z.object({
+      fromCharacter: stringField,
+      toCharacter: stringField,
+      type: stringField,
+      description: stringField,
+      intensity: z.number().min(0).max(100)
+    })).min(8).max(12)
+  }),
+  'spiral-worldview-expand': z.object({
+    expandedWorldview: z.array(worldviewEntrySchema).min(4).max(6)
+  }),
+  'spiral-outline': z.object({
+    outlineBeats: z.array(z.object({
+      title: stringField,
+      conflict: stringField,
+      characterDriven: stringField,
+      summary: stringField,
+      wordTarget: stringField,
+      relatedCharacters: stringList,
+      relatedOrganizations: stringList,
+      relatedWorldview: stringList
+    }))
   }),
   'spiral-validate': z.object({
     arcValidation: z.object({

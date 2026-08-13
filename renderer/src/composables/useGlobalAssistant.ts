@@ -6,6 +6,7 @@ import type { SelectOption } from 'naive-ui'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import type { AssistantToolCall, ChapterEditProposal, ChatMessage, GlobalAssistantProposal, PanelName } from '@/types/app'
+import { resolveOutlineReferenceIds } from '@/features/ai/outlineReferences'
 import { useAppStore } from '@/stores/app'
 import { toIpcPayload } from '@/utils/ipcPayload'
 
@@ -847,6 +848,39 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
     return `${currentText}\n\n${incomingText}`
   }
 
+  function outlineProposalReferenceText(item: { title?: string; conflict?: string; summary?: string }): string {
+    return [item.title, item.conflict, item.summary].filter(Boolean).join('\n')
+  }
+
+  function outlineReferenceLines(item: {
+    relatedCharacterIds?: string[]
+    relatedOrganizationIds?: string[]
+    relatedWorldviewIds?: string[]
+  }): string[] {
+    const characterNames = (item.relatedCharacterIds ?? [])
+      .map((id) => appStore.characters.find((entry) => entry.id === id)?.name)
+      .filter((name): name is string => Boolean(name))
+    const organizationNames = (item.relatedOrganizationIds ?? [])
+      .map((id) => appStore.organizations.find((entry) => entry.id === id)?.name)
+      .filter((name): name is string => Boolean(name))
+    const worldviewTitles = (item.relatedWorldviewIds ?? [])
+      .map((id) => appStore.worldviewEntries.find((entry) => entry.id === id)?.title)
+      .filter((title): title is string => Boolean(title))
+    return [
+      characterNames.length ? `关联角色：${characterNames.join('、')}` : '',
+      organizationNames.length ? `关联组织：${organizationNames.join('、')}` : '',
+      worldviewTitles.length ? `关联设定：${worldviewTitles.join('、')}` : ''
+    ].filter(Boolean)
+  }
+
+  function formatOutlineReferenceSummary(item: {
+    relatedCharacterIds?: string[]
+    relatedOrganizationIds?: string[]
+    relatedWorldviewIds?: string[]
+  }): string {
+    return outlineReferenceLines(item).join('；')
+  }
+
   function trimProposal(current: GlobalAssistantProposal): GlobalAssistantProposal | null {
     const next: GlobalAssistantProposal = {
       summary: current.summary,
@@ -1051,7 +1085,8 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
           `标题：${item.title}`,
           `目标字数：${item.wordTarget}`,
           `冲突：${item.conflict}`,
-          `摘要：${item.summary}`
+          `摘要：${item.summary}`,
+          ...outlineReferenceLines(item)
         ].filter(Boolean).join('\n'),
         reason: alreadyExists
           ? `同名大纲节点「${item.title}」已存在，请忽略或手动更新`
@@ -1077,7 +1112,8 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
               `标题：${target.title}`,
               `目标字数：${target.wordTarget}`,
               `冲突：${target.conflict}`,
-              `摘要：${target.summary}`
+              `摘要：${target.summary}`,
+              ...outlineReferenceLines(target)
             ].filter(Boolean).join('\n')
           : `未匹配到目标：${item.matchTitle}`,
         newText: [
@@ -1085,7 +1121,12 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
           `标题：${item.title || target?.title || item.matchTitle}`,
           `目标字数：${item.wordTarget || target?.wordTarget || ''}`,
           `冲突：${item.conflict || target?.conflict || ''}`,
-          `摘要：${mergedSummary}`
+          `摘要：${mergedSummary}`,
+          ...outlineReferenceLines({
+            relatedCharacterIds: item.relatedCharacterIds ?? target?.relatedCharacterIds,
+            relatedOrganizationIds: item.relatedOrganizationIds ?? target?.relatedOrganizationIds,
+            relatedWorldviewIds: item.relatedWorldviewIds ?? target?.relatedWorldviewIds
+          })
         ].filter(Boolean).join('\n'),
         reason: item.volumeId && !volume ? '目标分卷无效，无法写回' : item.reason,
         canApply: Boolean(target) && (!item.volumeId || Boolean(volume))
@@ -1395,12 +1436,16 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
         remainingCreates.push(item)
         continue
       }
+      const referenceText = outlineProposalReferenceText(item)
       appStore.createOutlineItem({
         volumeId: volume.id,
         title: item.title,
         wordTarget: item.wordTarget,
         conflict: item.conflict,
         summary: item.summary,
+        relatedCharacterIds: resolveOutlineReferenceIds(item.relatedCharacterIds, appStore.characters, referenceText),
+        relatedOrganizationIds: resolveOutlineReferenceIds(item.relatedOrganizationIds, appStore.organizations, referenceText),
+        relatedWorldviewIds: resolveOutlineReferenceIds(item.relatedWorldviewIds, appStore.worldviewEntries, referenceText),
         status: 'planned'
       })
       appliedCount += 1
@@ -1421,7 +1466,16 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
         title: item.title,
         wordTarget: item.wordTarget,
         conflict: item.conflict,
-        summary: mergeLongTextForIngest(target.summary, item.summary)
+        summary: mergeLongTextForIngest(target.summary, item.summary),
+        ...(item.relatedCharacterIds !== undefined
+          ? { relatedCharacterIds: resolveOutlineReferenceIds(item.relatedCharacterIds, appStore.characters, outlineProposalReferenceText(item)) }
+          : {}),
+        ...(item.relatedOrganizationIds !== undefined
+          ? { relatedOrganizationIds: resolveOutlineReferenceIds(item.relatedOrganizationIds, appStore.organizations, outlineProposalReferenceText(item)) }
+          : {}),
+        ...(item.relatedWorldviewIds !== undefined
+          ? { relatedWorldviewIds: resolveOutlineReferenceIds(item.relatedWorldviewIds, appStore.worldviewEntries, outlineProposalReferenceText(item)) }
+          : {})
       })
       appliedCount += 1
       appliedTitles.push(item.title || target.title)
@@ -1621,12 +1675,16 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
         message.warning('该大纲提案缺少有效分卷归属，无法写回')
         return false
       }
+      const referenceText = outlineProposalReferenceText(item)
       appStore.createOutlineItem({
         volumeId: volume.id,
         title: item.title,
         wordTarget: item.wordTarget,
         conflict: item.conflict,
         summary: item.summary,
+        relatedCharacterIds: resolveOutlineReferenceIds(item.relatedCharacterIds, appStore.characters, referenceText),
+        relatedOrganizationIds: resolveOutlineReferenceIds(item.relatedOrganizationIds, appStore.organizations, referenceText),
+        relatedWorldviewIds: resolveOutlineReferenceIds(item.relatedWorldviewIds, appStore.worldviewEntries, referenceText),
         status: 'planned'
       })
       setProposal(trimProposal({
@@ -1654,7 +1712,16 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
         title: item.title,
         wordTarget: item.wordTarget,
         conflict: item.conflict,
-        summary: mergeLongTextForIngest(target.summary, item.summary)
+        summary: mergeLongTextForIngest(target.summary, item.summary),
+        ...(item.relatedCharacterIds !== undefined
+          ? { relatedCharacterIds: resolveOutlineReferenceIds(item.relatedCharacterIds, appStore.characters, outlineProposalReferenceText(item)) }
+          : {}),
+        ...(item.relatedOrganizationIds !== undefined
+          ? { relatedOrganizationIds: resolveOutlineReferenceIds(item.relatedOrganizationIds, appStore.organizations, outlineProposalReferenceText(item)) }
+          : {}),
+        ...(item.relatedWorldviewIds !== undefined
+          ? { relatedWorldviewIds: resolveOutlineReferenceIds(item.relatedWorldviewIds, appStore.worldviewEntries, outlineProposalReferenceText(item)) }
+          : {})
       })
       const { [outlineUpdateKey(index, item.matchTitle)]: _removed, ...remainingTargets } = outlineTargetMap.value
       outlineTargetMap.value = remainingTargets
@@ -1989,6 +2056,7 @@ export function useGlobalAssistant(options: UseGlobalAssistantOptions = {}) {
     resolveCharacterTarget,
     resolveOrganizationTarget,
     resolveOutlineTarget,
+    formatOutlineReferenceSummary,
     hasWorldviewApplyTarget,
     hasCharacterApplyTarget,
     hasOrganizationApplyTarget,

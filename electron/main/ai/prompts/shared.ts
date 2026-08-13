@@ -178,3 +178,15 @@ export function resolveWritingStyleInstruction(context: Record<string, unknown>)
   if (label) return `当前项目默认写作风格为"${label}"，请让输出保持这一风格的一致性。`
   return `请在输出中遵循以下写作风格要求：${prompt}`
 }
+
+/** 将结构化世界状态格式化为生成任务必须遵守的动态事实块。 */
+export function formatStoryStateConstraint(context: Record<string, unknown>): string {
+  const storyState = String(context.storyStateBlock ?? '').trim()
+  if (!storyState) return ''
+
+  return `
+
+当前世界状态（动态事实，必须遵守）：
+${storyState}
+使用要求：以上状态反映故事当前进度，优先于可能过时的静态摘要。生成内容必须从这些状态继续推进，不得无理由重置角色位置、身体或心理状态、持有物、已知信息、目标、关系、伏笔和时间线。`
+}

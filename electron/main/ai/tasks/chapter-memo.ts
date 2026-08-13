@@ -12,6 +12,17 @@ import {
 
 const CHAPTER_MEMO_MAX_TOKENS = 26000
 
+// 备忘会继续作为后续 Writer 与审计任务的机器可读契约。
+// 统一对白标点，避免备忘示例与正文规则互相冲突。
+function normalizeMemoText(value: unknown): string {
+  return String(value ?? '')
+    .replace(/「/g, '“')
+    .replace(/」/g, '”')
+    .replace(/『/g, '‘')
+    .replace(/』/g, '’')
+    .trim()
+}
+
 function formatWritingJournals(journals: unknown): string {
   if (!Array.isArray(journals) || journals.length === 0) return ''
   const entries = journals
@@ -67,18 +78,18 @@ const handler: TaskHandler = {
     const parsed = extractJsonObject(raw) as { memo?: Partial<ChapterMemoResult['memo']> } & Partial<ChapterMemoResult['memo']>
     const memoRaw: Partial<ChapterMemoResult['memo']> = parsed.memo ?? parsed
     const stringArray = (v: unknown): string[] =>
-      Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : []
+      Array.isArray(v) ? v.map(normalizeMemoText).filter(Boolean) : []
     return {
       memo: {
-        currentTask: String(memoRaw.currentTask ?? '').trim(),
-        readerExpectation: String(memoRaw.readerExpectation ?? '').trim(),
+        currentTask: normalizeMemoText(memoRaw.currentTask),
+        readerExpectation: normalizeMemoText(memoRaw.readerExpectation),
         payoffs: stringArray(memoRaw.payoffs),
         holds: stringArray(memoRaw.holds),
-        transitionFunctions: String(memoRaw.transitionFunctions ?? '').trim(),
+        transitionFunctions: normalizeMemoText(memoRaw.transitionFunctions),
         decisionChecks: stringArray(memoRaw.decisionChecks),
         endingChanges: stringArray(memoRaw.endingChanges),
         doNotDo: stringArray(memoRaw.doNotDo),
-        emotionArc: String((memoRaw as Record<string, unknown>).emotionArc ?? '').trim()
+        emotionArc: normalizeMemoText((memoRaw as Record<string, unknown>).emotionArc)
       }
     } as ChapterMemoResult
   },

@@ -244,6 +244,10 @@ declare global {
         success: boolean
         error?: string
       }>
+      saveWorkspaceSync: (payload: unknown) => {
+        success: boolean
+        error?: string
+      }
       saveAppSettings: (
         payload: import('@shared/ipc-types').SaveAppSettingsRequest
       ) => Promise<import('@shared/ipc-types').IpcResult>
@@ -606,6 +610,11 @@ declare global {
         success: boolean
         data?: Array<{ title: string; date: string; type: string; items: string[] }>
       }>
+      fetchTutorial: () => Promise<{
+        success: boolean
+        data?: unknown
+        error?: string
+      }>
       listSessions: (projectId: string) => Promise<{
         success: boolean
         result?: Array<{ id: string; title: string; created_at: string; updated_at: string }>
@@ -714,6 +723,8 @@ declare global {
           Promise<{ turnId: string; finalText: string; status: string; error?: string }>
         turnCancel: (payload: import('@shared/assistant-runtime').TurnCancelRequest) =>
           Promise<{ ok: boolean; reason?: string }>
+        turnTruncate: (payload: import('@shared/assistant-runtime').TurnTruncateRequest) =>
+          Promise<import('@shared/assistant-runtime').TurnTruncateResult>
         stageList: (payload: {
           sessionId?: string
           status?: readonly string[]

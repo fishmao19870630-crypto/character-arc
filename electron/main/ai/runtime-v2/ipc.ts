@@ -23,7 +23,9 @@ import {
   type SurfaceDefinition,
   type TurnEvent,
   type TurnCancelRequest,
-  type TurnSendRequest
+  type TurnSendRequest,
+  type TurnTruncateRequest,
+  type TurnTruncateResult
 } from '@shared/assistant-runtime'
 import type { AiTaskName, AppSettings } from '../shared-types'
 import type { Tool } from '../agent/tools/types'
@@ -72,7 +74,12 @@ export interface AssistantIpcDeps {
 let deps: AssistantIpcDeps | null = null
 
 /** 每个 in-flight turn 的 AbortController，用于 TURN_CANCEL。 */
-const activeTurns = new Map<string, AbortController>()
+interface ActiveTurn {
+  controller: AbortController
+  sessionId: string
+}
+
+const activeTurns = new Map<string, ActiveTurn>()
 
 /**
  * 惰性拿到 ConversationManager 单例。委托给 runtime-v2/state.ts 的共享实例。
@@ -298,90 +305,120 @@ function registerTurnHandlers(): void {
   ipcMain.handle(
     ASSISTANT_IPC_CHANNELS.TURN_SEND,
     async (event, payload: TurnSendRequest) => {
-      const resolvePlan = requireDep('resolveTurnExecutionPlan')
-      const cm = await getConversation()
-      const session = cm.getSession(payload.sessionId)
-      if (!session) throw new Error(`session not found: ${payload.sessionId}`)
-      const startedAt = new Date().toISOString()
+      const controller = new AbortController()
+      const activeKeys = new Set<string>()
+      const registerActiveKey = (key?: string): void => {
+        if (!key) return
+        activeTurns.set(key, { controller, sessionId: payload.sessionId })
+        activeKeys.add(key)
+      }
+      registerActiveKey(payload.clientRequestId)
 
-      // 组装执行计划（Phase 2 实现），拿到 systemPrompt + tools + settings
-      const plan = await resolvePlan({
-        session,
-        surface: payload.surface,
-        request: payload
-      })
+      try {
+        const resolvePlan = requireDep('resolveTurnExecutionPlan')
+        const cm = await getConversation()
+        const session = cm.getSession(payload.sessionId)
+        if (!session) throw new Error(`session not found: ${payload.sessionId}`)
+        const startedAt = new Date().toISOString()
 
-      // Emitter：把 TurnEvent 通过 EVENT_STREAM 通道 push 到发起方 window
-      const emitter = (evt: AssistantEventPush): void => {
-        try {
-          event.sender.send(ASSISTANT_IPC_CHANNELS.EVENT_STREAM, evt)
-        } catch {
-          // renderer 已销毁则忽略
+        // 组装执行计划（Phase 2 实现），拿到 systemPrompt + tools + settings
+        const plan = await resolvePlan({
+          session,
+          surface: payload.surface,
+          request: payload
+        })
+
+        // Emitter：把 TurnEvent 通过 EVENT_STREAM 通道 push 到发起方 window
+        const emitter = (evt: AssistantEventPush): void => {
+          try {
+            event.sender.send(ASSISTANT_IPC_CHANNELS.EVENT_STREAM, evt)
+          } catch {
+            // renderer 已销毁则忽略
+          }
+        }
+
+        const loop = new AgentLoop(cm, stagedChangesStore, emitter)
+        const result = await loop.run({
+          session,
+          surface: payload.surface,
+          turnInput: {
+            userMessage: payload.userMessage,
+            intentHint: payload.intentHint,
+            attachments: payload.attachments
+          },
+          systemPrompt: plan.systemPrompt,
+          tools: plan.tools,
+          settings: plan.settings,
+          signal: controller.signal,
+          maxSteps: payload.surface.maxSteps,
+          maxOutputTokens: plan.maxOutputTokens,
+          onTurnCreated: registerActiveKey
+        })
+        const ledgerSnapshot = plan.evidenceLedger.snapshot()
+        const resumable = shouldOfferContinuation(plan.runtimePlan, ledgerSnapshot, result)
+        persistTurnRuntimeState({
+          conversation: cm,
+          sessionId: session.id,
+          turnId: result.turnId,
+          runtimePlan: plan.runtimePlan,
+          ledger: ledgerSnapshot,
+          resumable
+        })
+        if (resumable) {
+          appendRuntimeEvent(cm, emitter, session.id, result.turnId, {
+            kind: 'resumable',
+            seq: 0,
+            label: plan.runtimePlan.continuationLabel,
+            prompt: plan.runtimePlan.continuationPrompt,
+            reason: ledgerSnapshot.budgetExhausted
+              ? '本批读取预算已用完，建议进入下一批。'
+              : '这是分批任务，建议按下一批继续推进。'
+          })
+        }
+        emitTurnRunLog({
+          session,
+          surface: payload.surface,
+          request: payload,
+          settings: plan.settings,
+          startedAt,
+          result
+        })
+        return result
+      } finally {
+        for (const key of activeKeys) {
+          if (activeTurns.get(key)?.controller === controller) activeTurns.delete(key)
         }
       }
-
-      // 每个 turn 一个 AbortController，供 TURN_CANCEL 取消
-      const controller = new AbortController()
-
-      const loop = new AgentLoop(cm, stagedChangesStore, emitter)
-      const result = await loop.run({
-        session,
-        surface: payload.surface,
-        turnInput: {
-          userMessage: payload.userMessage,
-          intentHint: payload.intentHint,
-          attachments: payload.attachments
-        },
-        systemPrompt: plan.systemPrompt,
-        tools: plan.tools,
-        settings: plan.settings,
-        signal: controller.signal,
-        maxSteps: payload.surface.maxSteps,
-        maxOutputTokens: plan.maxOutputTokens,
-        onTurnCreated: (turnId) => activeTurns.set(turnId, controller)
-      })
-      activeTurns.delete(result.turnId)
-      const ledgerSnapshot = plan.evidenceLedger.snapshot()
-      const resumable = shouldOfferContinuation(plan.runtimePlan, ledgerSnapshot, result)
-      persistTurnRuntimeState({
-        conversation: cm,
-        sessionId: session.id,
-        turnId: result.turnId,
-        runtimePlan: plan.runtimePlan,
-        ledger: ledgerSnapshot,
-        resumable
-      })
-      if (resumable) {
-        appendRuntimeEvent(cm, emitter, session.id, result.turnId, {
-          kind: 'resumable',
-          seq: 0,
-          label: plan.runtimePlan.continuationLabel,
-          prompt: plan.runtimePlan.continuationPrompt,
-          reason: ledgerSnapshot.budgetExhausted
-            ? '本批读取预算已用完，建议进入下一批。'
-            : '这是分批任务，建议按下一批继续推进。'
-        })
-      }
-      emitTurnRunLog({
-        session,
-        surface: payload.surface,
-        request: payload,
-        settings: plan.settings,
-        startedAt,
-        result
-      })
-      return result
     }
   )
 
   ipcMain.handle(
     ASSISTANT_IPC_CHANNELS.TURN_CANCEL,
     async (_event, payload: TurnCancelRequest) => {
-      const controller = activeTurns.get(payload.turnId)
-      if (!controller) return { ok: false, reason: 'turn not active or already finished' }
-      controller.abort()
+      const active = activeTurns.get(payload.turnId)
+      if (!active) return { ok: false, reason: 'turn not active or already finished' }
+      active.controller.abort()
       activeTurns.delete(payload.turnId)
       return { ok: true }
+    }
+  )
+
+  ipcMain.handle(
+    ASSISTANT_IPC_CHANNELS.TURN_TRUNCATE,
+    async (_event, payload: TurnTruncateRequest): Promise<TurnTruncateResult> => {
+      const hasActiveTurn = Array.from(activeTurns.values()).some(
+        (active) => active.sessionId === payload.sessionId
+      )
+      if (hasActiveTurn) throw new Error('请先停止当前生成，再撤回或编辑历史对话。')
+
+      const cm = await getConversation()
+      const result = cm.truncateFrom(payload.sessionId, payload.fromTurnId)
+      const staged = stagedChangesStore.clearTurns(result.removedTurnIds)
+      return {
+        ...result,
+        discardedStaged: staged.discarded,
+        keptCommitted: staged.keptCommitted
+      }
     }
   )
 }

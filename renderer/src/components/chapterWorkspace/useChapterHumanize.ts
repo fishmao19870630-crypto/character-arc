@@ -1,6 +1,6 @@
 import { computed } from 'vue'
 import type { ComputedRef } from 'vue'
-import { buildChapterAssistantContext } from '@/features/ai/chapterAssistantContext'
+import { buildChapterAssistantContext, buildOutlineItemContext } from '@/features/ai/chapterAssistantContext'
 import { getResolvedChapterAssistantTemplates } from '@/features/ai/chapterAssistantOptions'
 import { getChapterPreviewText, getPlainTextFromEditorContent } from '@/features/chapters/editorContent'
 import { loadEnabledProjectSkillsContext } from '@/features/projectSkills/context'
@@ -43,11 +43,14 @@ export function useChapterHumanize(): {
           label: '降低 AI 感润色',
           description: '正在对选中文本做人化改写',
           panel: 'chapters',
-          timeoutMs: 180_000
         },
         async () => {
           const projectSkills = await loadEnabledProjectSkillsContext(appStore.currentProject, 'draft')
           const sameVolume = appStore.chapters.filter((item) => item.volumeId === chapter.volumeId)
+          const volumeOutlineItems = appStore.outlineItems.filter((item) => item.volumeId === chapter.volumeId)
+          const currentOutlineItem = chapter.outlineItemId
+            ? volumeOutlineItems.find((item) => item.id === chapter.outlineItemId)
+            : volumeOutlineItems.find((item) => item.title.trim() === chapter.title.trim())
           const context = buildChapterAssistantContext({
             project: appStore.currentProject,
             chapter,
@@ -78,6 +81,11 @@ export function useChapterHumanize(): {
             plotThreads: appStore.plotThreads,
             workflowDocuments: appStore.workflowDocuments,
             knowledgeDocuments: appStore.knowledgeDocuments,
+            currentOutlineItem: buildOutlineItemContext(currentOutlineItem, {
+              characters: appStore.characters,
+              organizations: appStore.organizations,
+              worldviewEntries: appStore.worldviewEntries
+            }),
             selectedText,
             responseMode: action.mode,
             responseLength: action.length,

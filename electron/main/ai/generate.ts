@@ -5,14 +5,16 @@ import { buildSystemPrompt, createModel, providerSupportsNativeStructuredOutput 
 import type { AiRunUsage, AppSettings, AiStreamHandlers, PromptPair } from './shared-types'
 import { stripReasoningMarkup } from './reasoning'
 import { isOpenAIReasoningChatModel, resolveProviderOptions } from './request-options'
+import { isAnthropicProtocol, isOpenAIChatProtocol } from '@shared/ai-provider-catalog'
+import { AiStreamProtocolError } from './sse'
 
 function useStreamFallback(settings: AppSettings): boolean {
-  return settings.provider === 'anthropic'
-    || (settings.provider === 'openai-compatible' && isOpenAIReasoningChatModel(settings))
+  return isAnthropicProtocol(settings.provider, settings.model)
+    || (isOpenAIChatProtocol(settings.provider, settings.model) && isOpenAIReasoningChatModel(settings))
 }
 
 function shouldRetryGenericUpstreamError(settings: AppSettings, error: unknown): boolean {
-  if (settings.provider !== 'openai-compatible' || !isOpenAIReasoningChatModel(settings)) {
+  if (!isOpenAIChatProtocol(settings.provider, settings.model) || !isOpenAIReasoningChatModel(settings)) {
     return false
   }
   return error instanceof Error && error.message.toLowerCase().includes('upstream request failed')
@@ -32,10 +34,14 @@ function resolveSamplingOptions(settings: AppSettings): { temperature?: number; 
 export type AiGenerateOptions = {
   schema?: ZodTypeAny
   disableReasoning?: boolean
+  preferLowReasoning?: boolean
+  forceNonStreaming?: boolean
 }
 
 export type AiTextGenerationResult = {
   text: string
+  /** 部分兼容模型会把 JSON 放在 reasoning 通道，保留它供结构化任务安全回退。 */
+  reasoningText?: string
   usage?: AiRunUsage
 }
 
@@ -102,7 +108,6 @@ export async function aiGenerateTextWithUsage(
         system,
         prompt: prompt.user,
         schema: options.schema,
-        maxOutputTokens: maxTokens,
         ...samplingOptions,
         providerOptions,
         abortSignal: signal,
@@ -123,7 +128,6 @@ export async function aiGenerateTextWithUsage(
       system,
       prompt: prompt.user,
       schema: options.schema,
-      maxOutputTokens: maxTokens,
       ...samplingOptions,
       providerOptions,
       abortSignal: signal
@@ -134,7 +138,7 @@ export async function aiGenerateTextWithUsage(
     }
   }
 
-  if (useStreamFallback(settings)) {
+  if (useStreamFallback(settings) && !options?.forceNonStreaming) {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         let streamError: unknown = null
@@ -142,7 +146,6 @@ export async function aiGenerateTextWithUsage(
           model: createModel(settings),
           system,
           prompt: prompt.user,
-          maxOutputTokens: maxTokens,
           ...samplingOptions,
           providerOptions,
           abortSignal: signal,
@@ -158,6 +161,7 @@ export async function aiGenerateTextWithUsage(
         }
         return {
           text: full,
+          reasoningText: await result.reasoningText,
           usage: toAiRunUsage(await result.totalUsage)
         }
       } catch (error) {
@@ -173,13 +177,13 @@ export async function aiGenerateTextWithUsage(
     model: createModel(settings),
     system,
     prompt: prompt.user,
-    maxOutputTokens: maxTokens,
     ...samplingOptions,
     providerOptions,
     abortSignal: signal
   })
   return {
     text: result.text,
+    reasoningText: result.reasoningText,
     usage: toAiRunUsage(result.usage)
   }
 }
@@ -202,16 +206,13 @@ export async function aiStreamTextWithUsage(
   signal: AbortSignal,
   maxTokens?: number
 ): Promise<AiTextGenerationResult> {
-  const providerOptions = resolveProviderOptions(settings)
+  const providerOptions = resolveProviderOptions(settings, { preferLowReasoning: true })
   const samplingOptions = resolveSamplingOptions(settings)
   let streamError: unknown = null
-  // 推理模型（mimo / deepseek-r1 / 智谱 GLM-Z1 等）通过非标准 reasoning_content 字段
-  // 返回思考内容，AI SDK 不解析。这里把回调注入到自定义 fetch，由其在 SSE 流中拦截。
   const result = streamText({
-    model: createModel(settings, handlers.onReasoningDelta),
+    model: createModel(settings),
     system: buildSystemPrompt(settings, prompt.system),
     prompt: prompt.user,
-    maxOutputTokens: maxTokens,
     ...samplingOptions,
     providerOptions,
     abortSignal: signal,
@@ -220,16 +221,39 @@ export async function aiStreamTextWithUsage(
   let full = ''
   // 推理模型（如 mimo、deepseek-r1）会先输出 reasoning，再输出正文。
   // 走 fullStream 才能拿到 reasoning-delta，让思考过程实时可见，否则首字前界面长时间无反馈。
-  for await (const part of result.fullStream) {
-    if (part.type === 'reasoning-delta') {
-      handlers.onReasoningDelta?.(part.text)
-    } else if (part.type === 'text-delta') {
-      full += part.text
-      handlers.onTextDelta(part.text)
-    } else if (part.type === 'error') {
-      // fullStream 把流式错误作为 error part 发出而不抛异常，必须显式抛出
-      throw part.error
+  try {
+    for await (const part of result.fullStream) {
+      if (part.type === 'reasoning-delta') {
+        handlers.onReasoningDelta?.(part.text)
+      } else if (part.type === 'text-delta') {
+        full += part.text
+        handlers.onTextDelta(part.text)
+      } else if (part.type === 'error') {
+        // fullStream 把流式错误作为 error part 发出而不抛异常，必须显式抛出
+        throw part.error
+      }
     }
+  } catch (error) {
+    // OpenCode 偶尔在推理阶段直接关闭 SSE，且没有任何可见正文。
+    // 用一次非流式请求恢复；已有正文时不重试，避免重复拼接半章内容。
+    if (error instanceof AiStreamProtocolError && !full.trim() && !signal.aborted) {
+      try {
+        const fallback = await aiGenerateTextWithUsage(
+          settings,
+          prompt,
+          maxTokens,
+          signal,
+          { forceNonStreaming: true, preferLowReasoning: true }
+        )
+        if (fallback.text.trim()) {
+          handlers.onTextDelta(fallback.text)
+          return fallback
+        }
+      } catch {
+        // 保留原始协议错误，避免把兜底请求的内部细节误报成首因。
+      }
+    }
+    throw error
   }
   if (streamError) throw streamError
   // 某些中转站对非 Claude 模型会把文本放在 reasoning/thinking blocks 里，
@@ -240,6 +264,17 @@ export async function aiStreamTextWithUsage(
       full = fallbackText
       handlers.onTextDelta(fallbackText)
     }
+  }
+  const finishReason = await result.finishReason
+  if (finishReason === 'length') {
+    throw new Error(
+      full.trim()
+        ? '模型输出达到上限，章节正文尚未完整生成。请缩短目标字数或改用输出能力更强的模型。'
+        : '模型把输出预算耗在了推理阶段，尚未生成章节正文。请改用非推理模型或稍后重试。'
+    )
+  }
+  if (!full.trim()) {
+    throw new Error('模型已结束响应，但没有生成可见正文。请改用非推理模型或稍后重试。')
   }
   return {
     text: stripReasoningMarkup(full),
@@ -262,13 +297,12 @@ export async function aiStreamObjectWithUsage(
   let streamError: unknown = null
   const samplingOptions = resolveSamplingOptions(settings)
   const result = streamObject({
-    model: createModel(settings, handlers.onReasoningDelta),
+    model: createModel(settings),
     system: buildSystemPrompt(settings, prompt.system),
     prompt: prompt.user,
     schema,
-    maxOutputTokens: maxTokens,
     ...samplingOptions,
-    providerOptions: resolveProviderOptions(settings),
+    providerOptions: resolveProviderOptions(settings, { preferLowReasoning: true }),
     abortSignal: signal,
     onError: ({ error }) => { streamError = error }
   })

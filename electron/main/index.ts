@@ -21,6 +21,7 @@ import {
   type WorkspaceAiRunRecord,
   type WorkspaceKnowledgeDocument,
   type WorkspacePayload,
+  mergeAppSettingsIntoWorkspaceSnapshot,
   normalizeWorkspacePayload
 } from './workspace-types'
 import { ensureWorkspaceDb, getWorkspaceDbIfInitialized, readWorkspaceSnapshot, writeAppSettingsRow, writeWorkspaceSnapshot } from './workspace-store'
@@ -71,13 +72,29 @@ function updateLatestWorkspaceSnapshot(payload: WorkspacePayload | null): void {
   latestWorkspaceSnapshot = payload
 }
 
+function updateLatestAppSettings(
+  settings: Partial<WorkspacePayload['appSettings']>,
+  metadata: { theme: string; selectedProjectId: string }
+): void {
+  latestWorkspaceSnapshot = mergeAppSettingsIntoWorkspaceSnapshot(
+    latestWorkspaceSnapshot,
+    settings,
+    metadata
+  )
+}
+
 function appendAiRunToLatestSnapshot(payload: WorkspaceAiRunEventPayload): void {
-  if (!latestWorkspaceSnapshot?.workspaces?.[payload.projectId]) {
+  if (!latestWorkspaceSnapshot) {
     return
   }
 
-  const workspace = latestWorkspaceSnapshot.workspaces[payload.projectId]
-  workspace.aiRuns = [...(workspace.aiRuns ?? []), payload.meta].slice(-200)
+  latestWorkspaceSnapshot.aiRuns = [
+    ...(latestWorkspaceSnapshot.aiRuns ?? []),
+    {
+      ...payload.meta,
+      projectId: payload.projectId || ''
+    }
+  ].slice(-200)
 }
 
 function emitAiRunEvent(payload: WorkspaceAiRunEventPayload): void {
@@ -565,8 +582,12 @@ registerMainIpcHandlers({
   setLatestWorkspaceSnapshot: (payload) => {
     updateLatestWorkspaceSnapshot(payload as WorkspacePayload | null)
   },
+  setLatestAppSettings: (settings, metadata) => {
+    updateLatestAppSettings(settings as Partial<WorkspacePayload['appSettings']>, metadata)
+  },
   normalizeWorkspacePayload: (payload) => normalizeWorkspacePayload(payload as WorkspacePayload | LegacyWorkspacePayload),
   ensureWorkspaceDb,
+  getWorkspaceDbIfInitialized,
   readWorkspaceSnapshot,
   writeWorkspaceSnapshot: (db, payload) => writeWorkspaceSnapshot(db, payload as WorkspacePayload),
   writeAppSettingsRow: (db, settings, metadata) =>

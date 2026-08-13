@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld('characterArc', {
   loadWorkspace: () => ipcRenderer.invoke('characterarc:load-workspace'),
   /** 将完整工作区快照写入 SQLite（全量覆盖写） */
   saveWorkspace: (payload: unknown) => ipcRenderer.invoke(IPC_CHANNELS.SAVE_WORKSPACE, toIpcPayload(payload)),
+  /** 窗口关闭前同步写入工作区，避免异步 IPC 被进程退出截断 */
+  saveWorkspaceSync: (payload: unknown) =>
+    ipcRenderer.sendSync('characterarc:save-workspace-sync', toIpcPayload(payload)),
   /** 仅更新 app_settings 行，避免全量序列化工作区 */
   saveAppSettings: (payload: SaveAppSettingsRequest) =>
     ipcRenderer.invoke(IPC_CHANNELS.SAVE_APP_SETTINGS, toIpcPayload(payload)),
@@ -222,6 +225,7 @@ contextBridge.exposeInMainWorld('characterArc', {
   // ── 检查更新 & 公告 ──
   checkUpdate: () => ipcRenderer.invoke('characterarc:check-update'),
   fetchAnnouncements: () => ipcRenderer.invoke('characterarc:fetch-announcements'),
+  fetchTutorial: () => ipcRenderer.invoke('characterarc:fetch-tutorial'),
   openExternalUrl: (url: string) => ipcRenderer.invoke('characterarc:open-external-url', url),
 
   // ── 番茄风向标 ──
@@ -263,6 +267,8 @@ contextBridge.exposeInMainWorld('characterArc', {
       ipcRenderer.invoke('characterarc:assistant:turn:send', toIpcPayload(payload)),
     turnCancel: (payload: unknown) =>
       ipcRenderer.invoke('characterarc:assistant:turn:cancel', toIpcPayload(payload)),
+    turnTruncate: (payload: unknown) =>
+      ipcRenderer.invoke('characterarc:assistant:turn:truncate', toIpcPayload(payload)),
     // Stage
     stageList: (payload: unknown) =>
       ipcRenderer.invoke('characterarc:assistant:stage:list', toIpcPayload(payload)),

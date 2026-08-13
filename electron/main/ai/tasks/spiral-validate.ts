@@ -2,6 +2,7 @@ import type { TaskHandler, PromptBuildInput } from './base'
 import { extractJsonObject } from './base'
 import type { AiTaskResult } from '../shared-types'
 import type { SpiralValidateResult, SpiralSeedResult, SpiralExpandResult } from '../spiral/types'
+import { normalizeWorldviewType } from './worldview-type'
 
 /** 螺旋校验任务：检查角色弧线、情节因果链和世界设定之间的一致性 */
 const handler: TaskHandler = {
@@ -26,6 +27,8 @@ const handler: TaskHandler = {
 
     const expandBlock = expandResult
       ? `配角：${expandResult.supportingCharacters.map((c) => `${c.name}（${c.role}）- 动机：${c.motivation}`).join('\n')}
+组织：${expandResult.organizations.map((organization) => `${organization.name}（${organization.type}）- ${organization.description}`).join('\n')}
+人物关系：${expandResult.relationships.map((relationship) => `${relationship.fromCharacter} → ${relationship.toCharacter}（${relationship.type}）：${relationship.description}`).join('\n')}
 大纲节拍：${expandResult.outlineBeats.map((b, i) => `${i + 1}. ${b.title} - 冲突：${b.conflict} - 驱动：${b.characterDriven}`).join('\n')}
 补充设定：${expandResult.expandedWorldview.map((r) => `${r.title}：${r.content}`).join('\n')}`
       : '（无）'
@@ -96,7 +99,7 @@ ${expandBlock}
           : [],
         worldviewAdditions: Array.isArray(patches.worldviewAdditions)
           ? patches.worldviewAdditions.map((r) => ({
-              type: String(r.type ?? '法则').trim(),
+              type: normalizeWorldviewType(r.type, '法则'),
               title: String(r.title ?? '').trim(),
               content: String(r.content ?? '').trim()
             }))

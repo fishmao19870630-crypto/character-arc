@@ -27,6 +27,7 @@ const handler: TaskHandler = {
     const draftText = String(context.draftText ?? '').trim()
     const memo = context.chapterMemo as Record<string, unknown> | undefined
     const targetWordCount = String(context.targetWordCount ?? '').trim()
+    const measuredWordCount = Number(context.measuredWordCount ?? 0)
     const projectSkillsBlock = formatProjectSkillsContext(context.projectSkills)
     const effectiveSkillsBlock = [projectSkillsBlock, skillsBlock].filter(Boolean).join('\n\n')
     const extraAuditRules = [
@@ -46,11 +47,11 @@ const handler: TaskHandler = {
 4. doNotDo 红线：是否触碰了备忘的红线
 5. 开头钩子：前 100 字是否有具体动作 / 对话 / 反差 / 信息冲击 / 未完成动作
 6. 章末钩子：是否有未完成动作或新信息把读者拉向下章（不是总结式收尾、鸡汤升华、廉价预告）
-7. 字数：实际字数是否在目标 ±20% 内
+7. 字数：实际字数是否在目标 ±10% 内
 8. 硬规则：是否出现破折号（——）、高疲劳词（冷笑/瞳孔骤缩/轰然炸裂/倒吸一口凉气/蝼蚁等）、章节内分隔符（---、#）
 
 issue 格式：
-- severity: "critical"（payoff 漏兑现 / endingChange 未发生 / 触碰红线）/"warning"（钩子弱 / 字数偏离）/"hint"（高疲劳词 / 句式单一）
+- severity: "critical"（payoff 漏兑现 / endingChange 未发生 / 触碰红线 / 字数偏离目标范围）/"warning"（钩子弱）/"hint"（高疲劳词 / 句式单一）
 - category: "payoff" / "ending-change" / "hold" / "do-not-do" / "opening-hook" / "ending-hook" / "word-count" / "hard-rule"
 - ref: 备忘里对应的条目原文（payoff 类）或正文片段（其他类）
 - hint: 一句话改进建议
@@ -58,10 +59,10 @@ issue 格式：
 返回格式：{"audit":{"pass":true|false,"wordCount":0,"issues":[{"severity":"","category":"","ref":"","hint":""}]}}
 
 pass 判定：所有 critical issue 数 == 0 且 warning issue 数 <= 2 即 pass。`,
-      user: `${capabilityPreamble.user}\n\n请审计以下章节初稿。\n\n${memoBlock}\n\n目标字数：${targetWordCount}${extraAuditRules ? `\n\n${extraAuditRules}` : ''}\n\n## 章节正文\n\n${draftText}\n\n返回审计 JSON。`
+      user: `${capabilityPreamble.user}\n\n请审计以下章节初稿。\n\n${memoBlock}\n\n目标字数：${targetWordCount}\n正文字符数（程序测量）：${Number.isFinite(measuredWordCount) && measuredWordCount > 0 ? measuredWordCount : '未提供'}\n字数审计必须直接使用上面的程序测量值，不要自行估算。${extraAuditRules ? `\n\n${extraAuditRules}` : ''}\n\n## 章节正文\n\n${draftText}\n\n返回审计 JSON。`
     }
   },
-  normalize(raw: string): AiTaskResult {
+  normalize(raw: string, context?: Record<string, unknown>): AiTaskResult {
     const parsed = extractJsonObject(raw) as { audit?: Partial<ChapterAuditResult['audit']> }
     const auditRaw = parsed.audit ?? {}
     const issuesRaw = Array.isArray(auditRaw.issues) ? auditRaw.issues : []
@@ -80,10 +81,37 @@ pass 判定：所有 critical issue 数 == 0 且 warning issue 数 <= 2 即 pass
       })
       .filter((x): x is NonNullable<typeof x> => x !== null)
 
-    const wordCount = Number(auditRaw.wordCount ?? 0)
+    const targetWordCount = Number(context?.targetWordCount ?? 0)
+    const measuredWordCount = Number(context?.measuredWordCount ?? 0)
+    const modelWordCount = Number(auditRaw.wordCount ?? 0)
+    const wordCount = Number.isFinite(measuredWordCount) && measuredWordCount > 0
+      ? measuredWordCount
+      : modelWordCount
+    if (
+      Number.isFinite(targetWordCount)
+      && targetWordCount > 0
+      && Number.isFinite(wordCount)
+      && wordCount > 0
+    ) {
+      const min = Math.round(targetWordCount * 0.9)
+      const max = Math.round(targetWordCount * 1.1)
+      const hasWordCountIssue = issues.some((issue) => issue.category === 'word-count')
+      if ((wordCount < min || wordCount > max) && !hasWordCountIssue) {
+        issues.push({
+          severity: 'critical',
+          category: 'word-count',
+          ref: `程序测量 ${wordCount} 字，目标 ${targetWordCount} 字，建议范围 ${min}-${max} 字`,
+          hint: wordCount < min
+            ? `正文低于目标范围，需要补足约 ${min - wordCount} 字，并优先扩展关键冲突、行动和情绪转折。`
+            : `正文超过目标范围，需要压缩约 ${wordCount - max} 字，优先删减重复描写和低推进段落。`
+        })
+      }
+    }
+    const criticalCount = issues.filter((issue) => issue.severity === 'critical').length
+    const warningCount = issues.filter((issue) => issue.severity === 'warning').length
     return {
       audit: {
-        pass: Boolean(auditRaw.pass),
+        pass: criticalCount === 0 && warningCount <= 2 && Boolean(auditRaw.pass),
         wordCount: Number.isFinite(wordCount) ? wordCount : 0,
         issues
       }

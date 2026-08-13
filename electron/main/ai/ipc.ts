@@ -17,6 +17,8 @@ import { runSpiralBootstrap } from './spiral'
 import type { SpiralBootstrapInput } from './spiral'
 import { formatAiErrorMessage } from './error-message'
 import { testProxyConnection } from './proxy-fetch'
+import { normalizeSettings } from './settings'
+import { shouldTryStreamingAgent } from '@shared/ai-provider-catalog'
 
 /**
  * AI IPC 模块的外部依赖注入接口。
@@ -139,8 +141,14 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
       const controller = new AbortController()
       const knowledgeContext = retrieveKnowledgeContext(payload, deps!.getLatestWorkspaceSnapshot() as Parameters<typeof retrieveKnowledgeContext>[1])
       activeAiStreams.set(streamId, controller)
+      const normalizedSettings = normalizeSettings(payload.settings)
 
-      const shouldTryAgent = payload.task === 'chapter-first-draft' || payload.task === 'global-assistant'
+      const shouldTryAgent = shouldTryStreamingAgent(
+        payload.task,
+        normalizedSettings.provider,
+        normalizedSettings.model,
+        normalizedSettings.apiProtocol
+      )
 
       let streamedContent = ''
       void (async () => {
@@ -190,9 +198,7 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
                 controller.signal,
                 knowledgeContext
               )
-              if (result.meta.projectId) {
-                deps!.emitAiRunEvent({ projectId: result.meta.projectId, meta: { id: randomUUID(), ...result.meta } })
-              }
+              deps!.emitAiRunEvent({ projectId: result.meta.projectId ?? '', meta: { id: randomUUID(), ...result.meta } })
               if (!event.sender.isDestroyed()) {
                 event.sender.send('characterarc:ai-stream-event', {
                   streamId,
@@ -226,9 +232,7 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
             controller.signal,
             knowledgeContext
           )
-          if (result.meta.projectId) {
-            deps!.emitAiRunEvent({ projectId: result.meta.projectId, meta: { id: randomUUID(), ...result.meta } })
-          }
+          deps!.emitAiRunEvent({ projectId: result.meta.projectId ?? '', meta: { id: randomUUID(), ...result.meta } })
           if (!event.sender.isDestroyed()) {
             event.sender.send('characterarc:ai-stream-event', {
               streamId,
@@ -240,8 +244,8 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
         } catch (error) {
           const aiRunMeta = error && typeof error === 'object' && 'aiRunMeta' in error
             ? (error as { aiRunMeta?: Record<string, unknown> }).aiRunMeta : undefined
-          if (aiRunMeta && (aiRunMeta as { projectId?: string }).projectId) {
-            deps!.emitAiRunEvent({ projectId: String((aiRunMeta as { projectId?: string }).projectId), meta: { id: randomUUID(), ...aiRunMeta } })
+          if (aiRunMeta) {
+            deps!.emitAiRunEvent({ projectId: String((aiRunMeta as { projectId?: string }).projectId ?? ''), meta: { id: randomUUID(), ...aiRunMeta } })
           }
           if (!event.sender.isDestroyed()) {
             event.sender.send('characterarc:ai-stream-event', controller.signal.aborted
@@ -282,7 +286,6 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
       const controller = new AbortController()
       const knowledgeContext = retrieveKnowledgeContext(payload, deps!.getLatestWorkspaceSnapshot() as Parameters<typeof retrieveKnowledgeContext>[1])
       activeAiStreams.set(streamId, controller)
-
       let streamedContent = ''
       void (async () => {
         try {
@@ -330,9 +333,7 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
               controller.signal,
               knowledgeContext
             )
-            if (result.meta.projectId) {
-              deps!.emitAiRunEvent({ projectId: result.meta.projectId, meta: { id: randomUUID(), ...result.meta } })
-            }
+            deps!.emitAiRunEvent({ projectId: result.meta.projectId ?? '', meta: { id: randomUUID(), ...result.meta } })
             if (!event.sender.isDestroyed()) {
               event.sender.send('characterarc:ai-stream-event', { streamId, type: 'done', content: streamedContent, result: result.result })
             }
@@ -360,9 +361,7 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
             controller.signal,
             knowledgeContext
           )
-          if (result.meta.projectId) {
-            deps!.emitAiRunEvent({ projectId: result.meta.projectId, meta: { id: randomUUID(), ...result.meta } })
-          }
+          deps!.emitAiRunEvent({ projectId: result.meta.projectId ?? '', meta: { id: randomUUID(), ...result.meta } })
           if (!event.sender.isDestroyed()) {
             event.sender.send('characterarc:ai-stream-event', {
               streamId,
@@ -442,29 +441,25 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
       }
       const result = await generateImage(settings, prompt)
 
-      if (projectId) {
-        const meta = buildRunMeta(
-          'cover-generate', projectId, undefined, metaSettings, 'success',
-          startedAt, new Date().toISOString(),
-          result.usage,
-          [], [],
-          false, result.revisedPrompt ?? '封面图片已生成', ''
-        )
-        deps!.emitAiRunEvent({ projectId, meta: { id: randomUUID(), ...meta } })
-      }
+      const meta = buildRunMeta(
+        'cover-generate', projectId ?? '', undefined, metaSettings, 'success',
+        startedAt, new Date().toISOString(),
+        result.usage,
+        [], [],
+        false, result.revisedPrompt ?? '封面图片已生成', ''
+      )
+      deps!.emitAiRunEvent({ projectId: projectId ?? '', meta: { id: randomUUID(), ...meta } })
       return { success: true, result }
     } catch (error) {
       const message = formatAiErrorMessage(error, '图片生成失败')
-      if (projectId) {
-        const meta = buildRunMeta(
-          'cover-generate', projectId, undefined, metaSettings, 'error',
-          startedAt, new Date().toISOString(),
-          undefined,
-          [], [],
-          false, '', message
-        )
-        deps!.emitAiRunEvent({ projectId, meta: { id: randomUUID(), ...meta } })
-      }
+      const meta = buildRunMeta(
+        'cover-generate', projectId ?? '', undefined, metaSettings, 'error',
+        startedAt, new Date().toISOString(),
+        undefined,
+        [], [],
+        false, '', message
+      )
+      deps!.emitAiRunEvent({ projectId: projectId ?? '', meta: { id: randomUUID(), ...meta } })
       return { success: false, error: message }
     }
   })
@@ -544,7 +539,9 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
         if (!event.sender.isDestroyed()) {
           event.sender.send('characterarc:ai-spiral-progress', progressEvent)
         }
-      }, controller.signal)
+      }, controller.signal, (meta) => {
+        deps!.emitAiRunEvent({ projectId: meta.projectId, meta: { id: randomUUID(), ...meta } })
+      })
 
       return { success: true, result }
     } catch (error) {

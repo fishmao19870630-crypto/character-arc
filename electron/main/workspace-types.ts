@@ -128,6 +128,8 @@ export type WorkspacePayload = {
   selectedProjectId: string
   knowledgeDocuments: WorkspaceKnowledgeDocument[]
   referenceWorks: WorkspaceReferenceWork[]
+  /** 应用级 AI 调用历史；projectId 为空时表示不关联具体项目。 */
+  aiRuns: WorkspaceAiRunRecord[]
   projects: Array<{
     id: string
     title: string
@@ -257,6 +259,9 @@ export type WorkspacePayload = {
         wordTarget: string
         conflict: string
         summary: string
+        relatedCharacterIds?: string[]
+        relatedOrganizationIds?: string[]
+        relatedWorldviewIds?: string[]
         status: 'idea' | 'planned' | 'drafting' | 'done'
         sortOrder: number
       }>
@@ -312,6 +317,7 @@ export type WorkspacePayload = {
     model: string
     apiKey: string
     baseUrl: string
+    apiProtocol?: 'auto' | 'openai-responses' | 'openai-chat' | 'anthropic'
     proxyUrl: string
     temperature?: number
     topP?: number
@@ -322,6 +328,7 @@ export type WorkspacePayload = {
       baseUrl: string
       apiKey: string
       model: string
+      apiProtocol?: 'auto' | 'openai-responses' | 'openai-chat' | 'anthropic'
       temperature?: number
       topP?: number
     }>
@@ -351,7 +358,8 @@ export type WorkspacePayload = {
   }>
 }
 
-export type LegacyWorkspacePayload = Omit<WorkspacePayload, 'workspaces'> & {
+export type LegacyWorkspacePayload = Omit<WorkspacePayload, 'workspaces' | 'aiRuns'> & {
+  aiRuns?: WorkspaceAiRunRecord[]
   worldviewEntries?: Array<{
     id: string
     type: string
@@ -423,6 +431,9 @@ export type LegacyWorkspacePayload = Omit<WorkspacePayload, 'workspaces'> & {
     wordTarget: string
     conflict: string
     summary: string
+    relatedCharacterIds?: string[]
+    relatedOrganizationIds?: string[]
+    relatedWorldviewIds?: string[]
     status?: 'idea' | 'planned' | 'drafting' | 'done'
     sortOrder?: number
   }>
@@ -453,6 +464,14 @@ export type LegacyWorkspacePayload = Omit<WorkspacePayload, 'workspaces'> & {
   }>
 }
 
+function normalizeApiProtocol(
+  value: unknown
+): 'auto' | 'openai-responses' | 'openai-chat' | 'anthropic' {
+  return value === 'openai-responses' || value === 'openai-chat' || value === 'anthropic'
+    ? value
+    : 'auto'
+}
+
 export function normalizeAppSettings(
   settings?: Partial<WorkspacePayload['appSettings']> | null
 ): WorkspacePayload['appSettings'] {
@@ -474,6 +493,7 @@ export function normalizeAppSettings(
     model: settings?.model || '',
     apiKey: settings?.apiKey || '',
     baseUrl: settings?.baseUrl || '',
+    apiProtocol: normalizeApiProtocol(settings?.apiProtocol),
     proxyUrl: settings?.proxyUrl || '',
     temperature,
     topP,
@@ -487,6 +507,7 @@ export function normalizeAppSettings(
             baseUrl: String(item.baseUrl ?? '').trim(),
             apiKey: String(item.apiKey ?? '').trim(),
             model: String(item.model ?? '').trim(),
+            apiProtocol: normalizeApiProtocol(item.apiProtocol),
             temperature:
               typeof item.temperature === 'number' && Number.isFinite(item.temperature)
                 ? Math.min(2, Math.max(0, item.temperature))
@@ -515,6 +536,21 @@ export function normalizeAppSettings(
       settings?.darkModeStyle === 'nord'
         ? settings.darkModeStyle
         : 'nord'
+  }
+}
+
+export function mergeAppSettingsIntoWorkspaceSnapshot(
+  snapshot: WorkspacePayload | null,
+  settings: Partial<WorkspacePayload['appSettings']>,
+  metadata: { theme: string; selectedProjectId: string }
+): WorkspacePayload | null {
+  if (!snapshot) return null
+
+  return {
+    ...snapshot,
+    theme: metadata.theme,
+    selectedProjectId: metadata.selectedProjectId,
+    appSettings: normalizeAppSettings(settings)
   }
 }
 
@@ -577,8 +613,24 @@ export function normalizeCoverWorkbenchHistory(
 
 export function normalizeWorkspacePayload(payload: WorkspacePayload | LegacyWorkspacePayload): WorkspacePayload {
   if ('workspaces' in payload && payload.workspaces) {
+    const workspaceAiRuns = Object.entries(payload.workspaces).flatMap(([projectId, workspace]) =>
+      (workspace.aiRuns ?? []).map((run) => ({ ...run, projectId }))
+    )
+    const payloadAiRuns = Array.isArray((payload as WorkspacePayload).aiRuns)
+      ? (payload as WorkspacePayload).aiRuns
+      : []
+    const globalAiRuns = Array.from(
+      new Map([...workspaceAiRuns, ...payloadAiRuns].map((run) => [run.id, run])).values()
+    )
     return {
       ...payload,
+      aiRuns: globalAiRuns,
+      workspaces: Object.fromEntries(
+        Object.entries(payload.workspaces).map(([projectId, workspace]) => [
+          projectId,
+          { ...workspace, aiRuns: [] }
+        ])
+      ),
       projects: payload.projects.map((project) => normalizeProjectRecord(project)),
       knowledgeDocuments: Array.isArray((payload as WorkspacePayload).knowledgeDocuments)
         ? (payload as WorkspacePayload).knowledgeDocuments
@@ -688,6 +740,12 @@ export function normalizeWorkspacePayload(payload: WorkspacePayload | LegacyWork
     selectedProjectId,
     knowledgeDocuments: [],
     referenceWorks: [],
+    aiRuns: Array.isArray(legacyPayload.aiRuns)
+      ? legacyPayload.aiRuns.map((run) => ({
+          ...run,
+          projectId: run.projectId || selectedProjectId
+        }))
+      : [],
     projects,
     workspaces,
     appSettings: normalizeAppSettings(legacyPayload.appSettings),

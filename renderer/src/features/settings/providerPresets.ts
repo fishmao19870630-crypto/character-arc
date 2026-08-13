@@ -1,23 +1,21 @@
 import type { AppSettings } from '@/types/app'
+import { AI_PROVIDER_CATALOG, type AiProviderCatalogEntry } from '@shared/ai-provider-catalog'
 
-export interface ProviderPreset {
-  label: string
-  value: string
-  model: string
-  baseUrl: string
-  hint: string
-}
+export type ProviderPreset = AiProviderCatalogEntry
 
-export const providerPresets: ProviderPreset[] = [
-  { label: 'OpenAI 兼容协议', value: 'openai-compatible', model: '', baseUrl: '', hint: '适用于 DeepSeek、通义千问、OpenAI、Moonshot、智谱、SiliconFlow、Ollama、New API 等。只需填域名或路径前缀（如 https://api.deepseek.com），系统自动补全 /v1。' },
-  { label: 'Anthropic 协议', value: 'anthropic', model: '', baseUrl: '', hint: '适用于 Anthropic 官方及 Claude 中转站。只需填域名或路径前缀（如 https://api.anthropic.com 或 https://xxx.com/anthropic），系统自动补全 /v1。' },
-  { label: '智谱 GLM', value: 'zhipu', model: 'glm-5.1', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', hint: '智谱 BigModel 官方 OpenAI 兼容接口，Base URL 使用 https://open.bigmodel.cn/api/paas/v4；系统不会为该地址追加 /v1。' }
-]
+export const providerPresets: readonly ProviderPreset[] = AI_PROVIDER_CATALOG
 
-export const providerOptions = providerPresets.map(({ label, value }) => ({ label, value }))
+const CUSTOM_PROVIDER_VALUES = new Set(['openai-compatible', 'anthropic-compatible'])
+
+// 自定义接口是最通用的入口，置顶；其余预设保持目录中的稳定顺序。
+export const providerOptions = [
+  ...providerPresets.filter(({ value }) => CUSTOM_PROVIDER_VALUES.has(value)),
+  ...providerPresets.filter(({ value }) => !CUSTOM_PROVIDER_VALUES.has(value))
+].map(({ label, value }) => ({ label, value }))
 
 export function getProviderPreset(provider: string): ProviderPreset {
-  return providerPresets.find((item) => item.value === provider) ?? providerPresets[0]
+  return providerPresets.find((item) => item.value === provider)
+    ?? providerPresets.find((item) => item.value === 'openai-compatible')!
 }
 
 export function resolveProviderDefaults(provider: string): Pick<AppSettings, 'model' | 'baseUrl'> {

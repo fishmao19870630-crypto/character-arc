@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Bell, BookUp2, Flame, ImagePlus, LibraryBig, Plus, RefreshCw, Settings2, Upload, Wrench } from 'lucide-vue-next'
+import { Bell, BookOpen, BookUp2, Flame, ImagePlus, LibraryBig, Plus, RefreshCw, Settings2, Upload, Wrench } from 'lucide-vue-next'
 import { NButton } from 'naive-ui'
 import type { StatusIndicator } from '@/composables/useStartupCheck'
 
@@ -18,6 +18,7 @@ const emit = defineEmits<{
   (e: 'openSkills'): void
   (e: 'openSettings'): void
   (e: 'openAnnouncement'): void
+  (e: 'openTutorial'): void
   (e: 'checkUpdate'): void
 }>()
 </script>
@@ -33,6 +34,9 @@ const emit = defineEmits<{
       <button class="hero-icon-btn" title="公告" @click="emit('openAnnouncement')">
         <Bell :size="18" />
         <span v-if="announcementStatus && announcementStatus !== 'none'" class="status-dot" :class="`status-dot--${announcementStatus}`" />
+      </button>
+      <button class="hero-icon-btn" title="使用教程" @click="emit('openTutorial')">
+        <BookOpen :size="18" />
       </button>
       <button class="hero-icon-btn" title="检查更新" @click="emit('checkUpdate')">
         <RefreshCw :size="18" />

@@ -7,6 +7,7 @@ import outlineItem from './outline-item'
 import outlineBatch from './outline-batch'
 import outlineChain from './outline-chain'
 import projectBootstrap from './project-bootstrap'
+import premiseEnhance from './premise-enhance'
 import chapterAnalysis from './chapter-analysis'
 import inspirationPack from './inspiration-pack'
 import assistantIntent from './assistant-intent'
@@ -31,6 +32,13 @@ import chapterRepair from './chapter-repair'
 import chapterSessionNote from './chapter-session-note'
 import spiralSeed from './spiral-seed'
 import spiralExpand from './spiral-expand'
+import {
+  spiralCharacters,
+  spiralOrganizations,
+  spiralRelationships,
+  spiralWorldviewExpand,
+  spiralOutline
+} from './spiral-stages'
 import spiralValidate from './spiral-validate'
 import characterEnhance from './character-enhance'
 import worldviewEnhance from './worldview-enhance'
@@ -58,6 +66,7 @@ register(outlineItem)
 register(outlineBatch)
 register(outlineChain)
 register(projectBootstrap)
+register(premiseEnhance)
 register(chapterAnalysis)
 register(inspirationPack)
 register(assistantIntent)
@@ -82,6 +91,11 @@ register(chapterRepair)
 register(chapterSessionNote)
 register(spiralSeed)
 register(spiralExpand)
+register(spiralCharacters)
+register(spiralOrganizations)
+register(spiralRelationships)
+register(spiralWorldviewExpand)
+register(spiralOutline)
 register(spiralValidate)
 register(characterEnhance)
 register(worldviewEnhance)

@@ -15,7 +15,7 @@ import { getTaskHandler } from '../tasks'
 import { getStructuredTaskSchema } from '../tasks/object-schemas'
 import { resolveTaskSkills } from '../skills'
 import { addAiRunUsage, aiGenerateText, aiGenerateTextWithUsage, aiStreamObjectWithUsage, aiStreamTextWithUsage } from '../generate'
-import { isToolUseNotSupportedError } from '../provider'
+import { buildSystemPrompt, createModel, isToolUseNotSupportedError } from '../provider'
 import { buildPromptInput } from './context-builder'
 import { enrichTaskContextForGeneration } from './task-context'
 import { buildRunMeta, buildResponsePreview } from './run-meta'
@@ -29,8 +29,14 @@ import type { StateDelta } from '../../story-state-store'
 import { indexChapterSegments } from '../knowledge-retrieval'
 import { runLightCheck } from '../audit/light-check'
 import { formatAiErrorMessage } from '../error-message'
+import {
+  isOpenCodeProvider,
+  isOpenAIChatProtocol,
+  resolveAiProviderProtocol
+} from '@shared/ai-provider-catalog'
 import { createHash, randomUUID } from 'node:crypto'
 import { BackgroundTaskCoordinator } from './background-task-coordinator'
+import { generateText } from 'ai'
 import {
   beginChapterProcessing,
   finishChapterProcessing,
@@ -43,6 +49,25 @@ type PostGenerationPipelineResult = {
   issues: ChapterPostGenerationIssuesPayload['issues']
   stateStatus: ChapterProcessingStageStatus
   indexStatus: ChapterProcessingStageStatus
+}
+
+/**
+ * 部分兼容模型会把结构化 JSON 放进 reasoning 通道，result.text 因而为空。
+ * 仅在 reasoning 确实可解析为 JSON 时采用，避免把普通思考文本交给任务解析器。
+ */
+function resolveStructuredGenerationText(
+  generation: { text: string; reasoningText?: string },
+  isStructured: boolean
+): string {
+  if (generation.text.trim() || !isStructured || !generation.reasoningText?.trim()) {
+    return generation.text
+  }
+
+  try {
+    return JSON.stringify(extractJsonObject(generation.reasoningText))
+  } catch {
+    return generation.text
+  }
 }
 
 /**
@@ -62,7 +87,9 @@ export async function runAiTask(
   // 白名单内的任务直接尝试走 agent loop，不预判 provider 能力。
   // 如果模型不支持 tool_use，运行时会抛错，在 catch 中降级或提示用户。
   const settingsForRouting = normalizeSettings(task.settings)
-  if (AGENT_TASK_WHITELIST.has(task.task)) {
+  const usesAgentRoute = AGENT_TASK_WHITELIST.has(task.task)
+  if (usesAgentRoute) {
+    await enrichTaskContextForGeneration(task, settingsForRouting)
     try {
       return await runAgentTask(task, knowledgeContext)
     } catch (error) {
@@ -84,7 +111,9 @@ export async function runAiTask(
 
   const { projectId, skills, usedSkillIds } = await resolveTaskSkills(task)
   logSelection(task.task, skills, knowledgeContext?.usedKnowledge ?? [])
-  await enrichTaskContextForGeneration(task, settings)
+  if (!usesAgentRoute) {
+    await enrichTaskContextForGeneration(task, settings)
+  }
 
   const input = buildPromptInput(task, skills, knowledgeContext)
   const prompt = handler.buildPrompt(input)
@@ -111,7 +140,7 @@ export async function runAiTask(
       structuredSchema ? { schema: structuredSchema } : undefined
     )
     totalUsage = addAiRunUsage(totalUsage, generation.usage)
-    let rawText = generation.text
+    let rawText = resolveStructuredGenerationText(generation, Boolean(structuredSchema))
     logResponse('REQUEST', settings, task.task, rawText, Date.now() - requestStartedAt, { usedSkills: usedSkillIds })
     let result: AiTaskResult
     let normalizeFailed = false
@@ -141,7 +170,7 @@ export async function runAiTask(
           structuredSchema ? { schema: structuredSchema } : undefined
         )
         totalUsage = addAiRunUsage(totalUsage, generation.usage)
-        rawText = generation.text
+        rawText = resolveStructuredGenerationText(generation, Boolean(structuredSchema))
         logResponse(`REPAIR_${attempt}`, settings, task.task, rawText, Date.now() - repairStartedAt, { usedSkills: usedSkillIds })
         normalizeFailed = false
         try {
@@ -258,9 +287,15 @@ export async function streamAiTask(
 
   const input = buildPromptInput(task, skills, knowledgeContext)
   const prompt = taskHandler.buildPrompt(input)
-  const maxTokens = shouldOmitMaxTokens(task.task)
-    ? undefined
-    : applyReasoningSafeFloor(taskHandler.resolveMaxTokens?.(input) ?? resolveMaxTokens(task))
+  const isOpenCodeDraft = task.task === 'chapter-first-draft'
+    && isOpenCodeProvider(settings.provider)
+    && isOpenAIChatProtocol(settings.provider, settings.model)
+  const taskMaxTokens = taskHandler.resolveMaxTokens?.(input) ?? resolveMaxTokens(task)
+  const maxTokens = isOpenCodeDraft
+    ? taskMaxTokens
+    : shouldOmitMaxTokens(task.task)
+      ? undefined
+      : applyReasoningSafeFloor(taskMaxTokens)
   const structuredSchema = taskHandler.outputType === 'json' ? getStructuredTaskSchema(taskHandler.name) : undefined
 
   if (taskHandler.outputType === 'json' && !structuredSchema) {
@@ -276,7 +311,7 @@ export async function streamAiTask(
       ? await aiStreamObjectWithUsage(settings, prompt, handlers, signal, structuredSchema, maxTokens)
       : await aiStreamTextWithUsage(settings, prompt, handlers, signal, maxTokens)
     totalUsage = addAiRunUsage(totalUsage, generation.usage)
-    let rawText = generation.text
+    let rawText = resolveStructuredGenerationText(generation, Boolean(structuredSchema))
     logResponse('STREAM', settings, task.task, rawText, Date.now() - requestStartedAt, { usedSkills: usedSkillIds })
     let result: AiTaskResult
     let normalizeFailed = false
@@ -303,7 +338,7 @@ export async function streamAiTask(
         structuredSchema ? { schema: structuredSchema } : undefined
       )
       totalUsage = addAiRunUsage(totalUsage, generation.usage)
-      rawText = generation.text
+      rawText = resolveStructuredGenerationText(generation, Boolean(structuredSchema))
       logResponse('STREAM_REPAIR', settings, task.task, rawText, Date.now() - repairStartedAt, { usedSkills: usedSkillIds })
       result = taskHandler.normalize(rawText, task.context)
       repairTriggered = true
@@ -377,19 +412,28 @@ export async function streamAiTask(
  * @param rawSettings - 原始应用设置
  * @returns 成功时返回当前 provider 和 model 名称
  */
-export async function testAiConnection(rawSettings: AppSettings): Promise<{ provider: string; model: string }> {
+export async function testAiConnection(rawSettings: AppSettings): Promise<{
+  provider: string
+  model: string
+  protocol: string
+}> {
   const settings = normalizeSettings(rawSettings)
   validateSettings(settings)
   const probePrompt = {
-    system: 'You are a connectivity probe. Reply with CONNECTED only.',
-    user: 'Return CONNECTED'
+    system: 'You are a connectivity probe. Reply briefly to confirm the request succeeded.',
+    user: 'Reply with CONNECTED.'
   }
   logPrompt('TEST', settings, probePrompt, 'test-connection')
-  const text = await aiGenerateText(settings, probePrompt)
-  if (!text.trim()) {
-    throw new Error('模型连接成功，但没有返回可读内容。')
+  await generateText({
+    model: createModel(settings),
+    system: buildSystemPrompt(settings, probePrompt.system),
+    prompt: probePrompt.user
+  })
+  return {
+    provider: settings.provider,
+    model: settings.model,
+    protocol: resolveAiProviderProtocol(settings.provider, settings.model, settings.apiProtocol)
   }
-  return { provider: settings.provider, model: settings.model }
 }
 
 let chapterWarningsEmitter: ((payload: ChapterStateWarningsPayload) => void) | null = null
@@ -601,52 +645,56 @@ async function runPostGenerationPipeline(
 
   try {
     const db = await ensureWorkspaceDb()
-    const involvedCharIds = extractInvolvedCharacterIds(context)
-    const preState = buildStoryStateContext(db, projectId, involvedCharIds)
+    if (context.deferStoryStateUntilFinal === true) {
+      stateStatus = 'skipped'
+    } else {
+      const involvedCharIds = extractInvolvedCharacterIds(context)
+      const preState = buildStoryStateContext(db, projectId, involvedCharIds)
 
-    const deltaResult = await extractStateDeltaViaLLMWithDiagnostics(
-      settings,
-      chapterContent,
-      preState,
-      signal
-    )
-    signal.throwIfAborted()
-    if (deltaResult.issue) {
-      issues.push(deltaResult.issue)
-      stateStatus = 'warning'
-    }
+      const deltaResult = await extractStateDeltaViaLLMWithDiagnostics(
+        settings,
+        chapterContent,
+        preState,
+        signal
+      )
+      signal.throwIfAborted()
+      if (deltaResult.issue) {
+        issues.push(deltaResult.issue)
+        stateStatus = 'warning'
+      }
 
-    if (deltaResult.delta) {
-      const checkResult = runLightCheck(chapterContent, preState, deltaResult.delta)
-      if (!checkResult.passed) {
-        logResponse('LIGHT_CHECK', settings, 'chapter-first-draft',
-          checkResult.violations.map((v) => `[${v.severity}] ${v.message}`).join('\n'), 0, {})
-        if (chapterWarningsEmitter && chapterId) {
-          chapterWarningsEmitter({
-            projectId,
-            chapterId,
-            chapterIndex,
-            generatedAt,
-            violations: checkResult.violations
+      if (deltaResult.delta) {
+        const checkResult = runLightCheck(chapterContent, preState, deltaResult.delta)
+        if (!checkResult.passed) {
+          logResponse('LIGHT_CHECK', settings, 'chapter-first-draft',
+            checkResult.violations.map((v) => `[${v.severity}] ${v.message}`).join('\n'), 0, {})
+          if (chapterWarningsEmitter && chapterId) {
+            chapterWarningsEmitter({
+              projectId,
+              chapterId,
+              chapterIndex,
+              generatedAt,
+              violations: checkResult.violations
+            })
+          }
+        }
+
+        try {
+          applyStateDelta(db, projectId, chapterIndex, deltaResult.delta)
+          if (stateStatus === 'pending') stateStatus = 'done'
+        } catch (error) {
+          stateStatus = 'error'
+          logError('POST_GENERATION_APPLY_STATE', settings, 'chapter-first-draft', error, 0)
+          issues.push({
+            stage: 'pipeline',
+            severity: 'error',
+            message: '本章正文已生成，但世界状态写入失败，后续连续性检查可能暂时不准确。',
+            detail: buildIssueDetail(error)
           })
         }
+      } else if (stateStatus === 'pending') {
+        stateStatus = 'skipped'
       }
-
-      try {
-        applyStateDelta(db, projectId, chapterIndex, deltaResult.delta)
-        if (stateStatus === 'pending') stateStatus = 'done'
-      } catch (error) {
-        stateStatus = 'error'
-        logError('POST_GENERATION_APPLY_STATE', settings, 'chapter-first-draft', error, 0)
-        issues.push({
-          stage: 'pipeline',
-          severity: 'error',
-          message: '本章正文已生成，但世界状态写入失败，后续连续性检查可能暂时不准确。',
-          detail: buildIssueDetail(error)
-        })
-      }
-    } else if (stateStatus === 'pending') {
-      stateStatus = 'skipped'
     }
 
     if (chapterId) {
@@ -737,7 +785,7 @@ ${chapterContent}
   }
 
   try {
-    const generation = await aiGenerateTextWithUsage(settings, prompt, 1500, signal, { disableReasoning: true })
+    const generation = await aiGenerateTextWithUsage(settings, prompt, undefined, signal, { disableReasoning: true })
     const raw = generation.text
     const parsed = extractJsonObject(raw)
     const delta = normalizeStateDelta(parsed)

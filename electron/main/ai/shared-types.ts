@@ -28,6 +28,8 @@ export type AppSettings = {
   model: string
   apiKey: string
   baseUrl: string
+  /** API 线协议；auto 时按供应商和模型目录解析 */
+  apiProtocol?: 'auto' | 'openai-responses' | 'openai-chat' | 'anthropic'
   /** 可选：AI 请求使用的 HTTP/HTTPS 代理地址 */
   proxyUrl?: string
   /** 可选：模型采样温度，留空时使用服务端默认值 */
@@ -42,7 +44,7 @@ export type AppSettings = {
   imageApiKey: string
   /** 可选：图片生成独立 Base URL */
   imageBaseUrl: string
-  /** AI 请求超时（秒），默认 180 */
+  /** 旧数据兼容字段；AI 请求不再按时长自动取消。 */
   aiTimeoutSeconds?: number
 }
 
@@ -71,8 +73,14 @@ export type AiTaskName =
   | 'chapter-humanize'
   | 'plot-thread-detect'
   | 'project-bootstrap'
+  | 'premise-enhance'
   | 'spiral-seed'
   | 'spiral-expand'
+  | 'spiral-characters'
+  | 'spiral-organizations'
+  | 'spiral-relationships'
+  | 'spiral-worldview-expand'
+  | 'spiral-outline'
   | 'spiral-validate'
   | 'chapter-analysis'
   | 'chapter-repair'
@@ -214,6 +222,10 @@ export type OutlineResult = {
   wordTarget: string
   conflict: string
   summary: string
+  /** 该节点直接涉及的角色、组织和世界观条目 ID。 */
+  relatedCharacterIds?: string[]
+  relatedOrganizationIds?: string[]
+  relatedWorldviewIds?: string[]
 }
 
 /** 批量大纲生成结果 */
@@ -282,6 +294,9 @@ export type GlobalAssistantProposalResult = {
     conflict?: string
     summary?: string
     volumeId?: string
+    relatedCharacterIds?: string[]
+    relatedOrganizationIds?: string[]
+    relatedWorldviewIds?: string[]
   }>
   notes: string[]
 }
@@ -339,6 +354,11 @@ export type MarketAnalysisResult = {
     targetAudience: string
     outline: string[]
   }>
+}
+
+/** 小说创建向导中的简介优化结果 */
+export type PremiseEnhanceResult = {
+  premise: string
 }
 
 /**
@@ -528,6 +548,7 @@ export type AiTaskResult =
   | AssistantActionProposalResult
   | ProjectBootstrapResult
   | MarketAnalysisResult
+  | PremiseEnhanceResult
   | WorkflowDocumentsResult
   | WorkflowStageDocumentsResult
   | ChapterAnalysisResult
@@ -575,8 +596,6 @@ export type AiAgentStreamHandlers = {
   onEditApplied: (chapterId: string, editType: string, preview: string, versionId: string) => void
   onEditProposed: (chapterId: string, proposalId: string, editType: string, preview: string, oldContent: string, newContent: string) => void
 }
-
-export const AI_REQUEST_TIMEOUT_MS = 180_000
 
 /** Agent loop 单次任务最多允许的工具循环轮数。超过即抛错，避免死循环吃 token。 */
 export const AGENT_MAX_TOOL_ITERATIONS = 8

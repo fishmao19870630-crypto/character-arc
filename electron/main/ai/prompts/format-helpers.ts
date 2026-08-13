@@ -163,12 +163,18 @@ export function formatCurrentOutlineItem(source: unknown): string {
   const summary = String(record.summary ?? '').trim()
   const conflict = String(record.conflict ?? '').trim()
   const wordTarget = String(record.wordTarget ?? '').trim()
+  const characterNames = Array.isArray(record.relatedCharacterNames) ? record.relatedCharacterNames.map((item) => String(item).trim()).filter(Boolean).join('、') : ''
+  const organizationNames = Array.isArray(record.relatedOrganizationNames) ? record.relatedOrganizationNames.map((item) => String(item).trim()).filter(Boolean).join('、') : ''
+  const worldviewTitles = Array.isArray(record.relatedWorldviewTitles) ? record.relatedWorldviewTitles.map((item) => String(item).trim()).filter(Boolean).join('、') : ''
   if (!title && !summary && !conflict) return ''
   return [
     title ? `标题：${title}` : '',
     wordTarget ? `大纲预估：${wordTarget}` : '',
     conflict ? `核心冲突：${conflict}` : '',
-    summary ? `剧情边界：${summary}` : ''
+    summary ? `剧情边界：${summary}` : '',
+    characterNames ? `关联角色：${characterNames}` : '',
+    organizationNames ? `关联组织：${organizationNames}` : '',
+    worldviewTitles ? `关联设定：${worldviewTitles}` : ''
   ].filter(Boolean).join('\n')
 }
 

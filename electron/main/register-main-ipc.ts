@@ -115,8 +115,13 @@ function compareVersions(a: string, b: string): number {
 type RegisterMainIpcHandlersDeps = {
   windowManager: WindowManager
   setLatestWorkspaceSnapshot: (payload: unknown) => void
+  setLatestAppSettings: (
+    settings: unknown,
+    metadata: { theme: string; selectedProjectId: string }
+  ) => void
   normalizeWorkspacePayload: (payload: unknown) => unknown
   ensureWorkspaceDb: () => Promise<DatabaseSync>
+  getWorkspaceDbIfInitialized: () => DatabaseSync | null
   readWorkspaceSnapshot: (db: DatabaseSync) => unknown
   writeWorkspaceSnapshot: (db: DatabaseSync, payload: unknown) => void
   writeAppSettingsRow: (
@@ -1352,6 +1357,26 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
     }
   })
 
+  ipcMain.on('characterarc:save-workspace-sync', (event, payload: unknown) => {
+    try {
+      const db = deps.getWorkspaceDbIfInitialized()
+      if (!db) {
+        throw new Error('工作区数据库尚未初始化')
+      }
+      const normalized = deps.normalizeWorkspacePayload(payload)
+      deps.writeWorkspaceSnapshot(db, normalized)
+      deps.setLatestWorkspaceSnapshot(normalized)
+      deps.windowManager.broadcastWindowEvent('characterarc:workspace-sync-event', normalized, event.sender.id)
+      event.returnValue = { success: true }
+    } catch (error) {
+      console.error('[workspace] saveWorkspaceSync failed:', error)
+      event.returnValue = {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown workspace save error'
+      }
+    }
+  })
+
   ipcMain.handle('characterarc:save-app-settings', async (_event, payload: unknown) => {
     try {
       const db = await deps.ensureWorkspaceDb()
@@ -1362,7 +1387,9 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
       }
       const theme = typeof record.theme === 'string' ? record.theme : 'ocean'
       const selectedProjectId = typeof record.selectedProjectId === 'string' ? record.selectedProjectId : ''
-      deps.writeAppSettingsRow(db, record.appSettings, { theme, selectedProjectId })
+      const metadata = { theme, selectedProjectId }
+      deps.writeAppSettingsRow(db, record.appSettings, metadata)
+      deps.setLatestAppSettings(record.appSettings, metadata)
       nativeTheme.themeSource = (record.appSettings as { darkMode?: boolean } | undefined)?.darkMode ? 'dark' : 'light'
       return { success: true }
     } catch (error) {
@@ -1527,6 +1554,19 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
       timeoutMs: 8000,
       preferActiveMirror: false,
       allowStaleFallback: false,
+    })
+  })
+
+  ipcMain.handle('characterarc:fetch-tutorial', async () => {
+    return fetchWithCache({
+      repo: 'uu201/character-arc',
+      branch: 'main',
+      filePath: 'tutorial.json',
+      cacheDir: 'tutorial-cache',
+      ttlMs: 6 * 60 * 60 * 1000,
+      timeoutMs: 8000,
+      preferActiveMirror: true,
+      allowStaleFallback: true
     })
   })
 

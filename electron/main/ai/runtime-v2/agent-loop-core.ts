@@ -73,6 +73,8 @@ export type EventEmitter = (evt: AssistantEventPush) => void
 export type RunAgentImpl = (params: RunAgentParams) => Promise<RunAgentResult>
 export type ToolUseErrorClassifier = (error: unknown) => boolean
 
+const STREAM_EVENT_FLUSH_MS = 50
+
 /** 工具工厂：turn 创建后被调用，闭包 turnId/sessionId 供 stage_* 工具使用。 */
 export type ToolFactory = (ctx: {
   turnId: string
@@ -132,16 +134,42 @@ export class AgentLoopCore {
     sessionId: string,
     turnId: string,
     toolCalls: ToolCallTrace[]
-  ): AiAgentStreamHandlers {
+  ): { handlers: AiAgentStreamHandlers; flush: () => void } {
     const toolArgs = new Map<string, Record<string, unknown>>()
-    return {
+    let pending: { kind: 'chunk' | 'reasoning'; delta: string } | null = null
+    let flushTimer: ReturnType<typeof setTimeout> | null = null
+
+    const flush = (): void => {
+      if (flushTimer) {
+        clearTimeout(flushTimer)
+        flushTimer = null
+      }
+      if (!pending) return
+      const event = pending
+      pending = null
+      this.dispatch(sessionId, turnId, { ...event, seq: 0 } as TurnEvent)
+    }
+
+    const queueDelta = (kind: 'chunk' | 'reasoning', delta: string): void => {
+      if (!delta) return
+      if (pending?.kind === kind) {
+        pending.delta += delta
+      } else {
+        flush()
+        pending = { kind, delta }
+      }
+      if (!flushTimer) flushTimer = setTimeout(flush, STREAM_EVENT_FLUSH_MS)
+    }
+
+    const handlers: AiAgentStreamHandlers = {
       onTextDelta: (delta) => {
-        this.dispatch(sessionId, turnId, { kind: 'chunk', seq: 0, delta })
+        queueDelta('chunk', delta)
       },
       onReasoningDelta: (delta) => {
-        this.dispatch(sessionId, turnId, { kind: 'reasoning', seq: 0, delta })
+        queueDelta('reasoning', delta)
       },
       onToolUseStart: (toolUseId, toolName, args) => {
+        flush()
         toolArgs.set(toolUseId, args)
         this.dispatch(sessionId, turnId, {
           kind: 'tool_use_start',
@@ -152,6 +180,7 @@ export class AgentLoopCore {
         })
       },
       onToolResult: (toolUseId, toolName, content, isError, durationMs) => {
+        flush()
         this.dispatch(sessionId, turnId, {
           kind: 'tool_result',
           seq: 0,
@@ -169,6 +198,7 @@ export class AgentLoopCore {
         })
       },
       onAgentStatus: (message) => {
+        flush()
         this.dispatch(sessionId, turnId, {
           kind: 'agent_status',
           seq: 0,
@@ -179,6 +209,7 @@ export class AgentLoopCore {
       onEditApplied: () => {},
       onEditProposed: () => {}
     }
+    return { handlers, flush }
   }
 
   /** 订阅 StagedChangesStore：本轮 turn 内的变更 → staged_change 事件双写。 */
@@ -243,6 +274,8 @@ export class AgentLoopCore {
     let status: TurnStatus = 'done'
     let errorMessage: string | undefined
 
+    const stream = this.buildHandlers(sessionId, turnId, toolCalls)
+
     try {
       const result = await this.runAgentImpl({
         settings: options.settings,
@@ -253,7 +286,7 @@ export class AgentLoopCore {
           signal: options.signal,
           projectId: options.session.projectId
         },
-        handlers: this.buildHandlers(sessionId, turnId, toolCalls),
+        handlers: stream.handlers,
         maxTokens: options.maxOutputTokens,
         maxSteps: options.maxSteps ?? options.surface.maxSteps
       })
@@ -274,12 +307,14 @@ export class AgentLoopCore {
           `可能原因：模型/中转站在带 tools 时不吐流式文本；模型名或 API Key 配置有误；上下文触发 provider 内部限流。`
         )
       }
+      stream.flush()
       this.dispatch(sessionId, turnId, {
         kind: 'done',
         seq: 0,
         content: finalText
       })
     } catch (e) {
+      stream.flush()
       if (options.signal.aborted) {
         status = 'canceled'
         this.dispatch(sessionId, turnId, {
@@ -299,6 +334,7 @@ export class AgentLoopCore {
         })
       }
     } finally {
+      stream.flush()
       unsubscribe()
       this.conversation.updateTurnStatus(turnId, status, finalText)
     }

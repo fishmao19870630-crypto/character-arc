@@ -238,6 +238,7 @@ async function handleAiEnhance(): Promise<void> {
           task: 'worldview-enhance',
           settings: appStore.appSettings,
           context: {
+            projectId: appStore.currentProject?.id,
             currentForm: { type: form.type, title: form.title, content: form.content },
             projectTitle: appStore.currentProject?.title,
             projectGenre: appStore.currentProject?.genre,

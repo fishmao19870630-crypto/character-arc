@@ -68,7 +68,8 @@ const WRITING_TASKS: AiTaskName[] = [
   'chapter-assistant', 'chapter-first-draft', 'outline-batch', 'outline-chain',
   'chapter-analysis', 'inspiration-pack', 'project-bootstrap',
   'worldview-entry', 'character-card', 'outline-item',
-  'spiral-seed', 'spiral-expand', 'spiral-validate'
+  'spiral-seed', 'spiral-expand', 'spiral-characters', 'spiral-organizations',
+  'spiral-relationships', 'spiral-worldview-expand', 'spiral-outline', 'spiral-validate'
 ]
 
 /** 构造 HeuristicResult 的便捷工厂函数 */

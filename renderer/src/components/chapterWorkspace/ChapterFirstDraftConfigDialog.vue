@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { CircleHelp } from 'lucide-vue-next'
-import { NButton, NCheckbox, NCheckboxGroup, NInputNumber, NInput, NModal, NSelect, NSwitch, NTooltip } from 'naive-ui'
+import { NButton, NCheckbox, NCheckboxGroup, NInputNumber, NInput, NModal, NSelect, NSwitch, NTag, NTooltip } from 'naive-ui'
+import { buildChapterReferencePreview, buildOutlineItemContext } from '@/features/ai/chapterAssistantContext'
+import { getChapterPreviewText, getPlainTextFromEditorContent } from '@/features/chapters/editorContent'
 import { useAppStore } from '@/stores/app'
 import { parseChapterWordTarget } from '@/features/chapters/wordTarget'
 import type { NovelWorkflowStageId, ProjectSkillItem } from '@/types/app'
@@ -30,10 +32,29 @@ const targetWordCount = ref(3000)
 const selectedRefIds = ref<string[]>([])
 const userPrompt = ref('')
 const expandedStepId = ref<FirstDraftStepId | null>('draft')
+const discoveredProjectSkills = ref<ProjectSkillItem[]>([])
+const hasScannedProjectSkills = ref(false)
+const isLoadingProjectSkills = ref(false)
+const projectSkillsLoadError = ref('')
 const steps = reactive<Record<FirstDraftStepId, FirstDraftStepConfig>>(createDefaultFirstDraftSteps())
 
 const referenceWorks = computed(() => appStore.referenceWorks)
-const projectSkills = computed(() => project.value?.projectSkills ?? [])
+const projectSkills = computed(() => {
+  const savedSkills = project.value?.projectSkills ?? []
+  if (!hasScannedProjectSkills.value) return savedSkills
+
+  const savedSkillById = new Map(savedSkills.map((skill) => [skill.id, skill]))
+  return discoveredProjectSkills.value.map((skill) => {
+    const savedSkill = savedSkillById.get(skill.id)
+    return {
+      ...skill,
+      enabled: skill.compatibility === 'external-only'
+        ? false
+        : (savedSkill?.enabled ?? skill.enabled),
+      stageIds: savedSkill?.stageIds ?? skill.stageIds
+    }
+  })
+})
 const selectableProjectSkills = computed(() =>
   projectSkills.value.filter((skill) =>
     skill.category !== 'tool'
@@ -99,6 +120,74 @@ const activeStep = computed(() =>
   FIRST_DRAFT_STEP_DEFINITIONS.find((step) => step.id === expandedStepId.value) ?? FIRST_DRAFT_STEP_DEFINITIONS[1]
 )
 
+const currentOutlineItem = computed(() => {
+  const currentChapter = chapter.value
+  if (!currentChapter) return null
+  const volumeOutlineItems = appStore.outlineItems.filter((item) => item.volumeId === currentChapter.volumeId)
+  return currentChapter.outlineItemId
+    ? volumeOutlineItems.find((item) => item.id === currentChapter.outlineItemId) ?? null
+    : volumeOutlineItems.find((item) => item.title.trim() === currentChapter.title.trim()) ?? null
+})
+
+const contextPreview = computed(() => {
+  const currentChapter = chapter.value
+  if (!currentChapter) {
+    return buildChapterReferencePreview({
+      chapterContent: '',
+      currentOutlineItem: null,
+      relatedChapters: [],
+      userPrompt: userPrompt.value,
+      worldviewEntries: [],
+      characters: [],
+      organizations: [],
+      characterRelationships: [],
+      organizationMemberships: []
+    })
+  }
+  const currentChapterIndex = appStore.chapters.findIndex((item) => item.id === currentChapter.id)
+  const precedingChapters = currentChapterIndex >= 0 ? appStore.chapters.slice(0, currentChapterIndex) : []
+  const relatedChapters = precedingChapters
+    .slice(-4)
+    .map((item) => ({
+      title: item.title,
+      summary: item.summary,
+      preview: getChapterPreviewText(item.content ?? '').slice(0, 800)
+    }))
+  return buildChapterReferencePreview({
+    chapter: currentChapter,
+    chapterContent: getPlainTextFromEditorContent(currentChapter.content ?? ''),
+    currentOutlineItem: buildOutlineItemContext(currentOutlineItem.value, {
+      characters: appStore.characters,
+      organizations: appStore.organizations,
+      worldviewEntries: appStore.worldviewEntries
+    }),
+    relatedChapters,
+    userPrompt: userPrompt.value,
+    worldviewEntries: appStore.worldviewEntries,
+    characters: appStore.characters,
+    organizations: appStore.organizations,
+    characterRelationships: appStore.characterRelationships,
+    organizationMemberships: appStore.organizationMemberships
+  })
+})
+
+const contextStats = computed(() => [
+  { label: '角色', value: contextPreview.value.counts.characters },
+  { label: '组织', value: contextPreview.value.counts.organizations },
+  { label: '设定', value: contextPreview.value.counts.worldviewEntries },
+  { label: '关系', value: contextPreview.value.counts.characterRelationships },
+  { label: '归属', value: contextPreview.value.counts.organizationMemberships }
+])
+
+const previewRelationships = computed(() => contextPreview.value.characterRelationships.slice(0, 4))
+const previewMemberships = computed(() => contextPreview.value.organizationMemberships.slice(0, 4))
+const hasContextPreviewData = computed(() =>
+  contextPreview.value.characters.length > 0
+  || contextPreview.value.organizations.length > 0
+  || contextPreview.value.worldviewEntries.length > 0
+  || Boolean(contextPreview.value.currentOutlineItem)
+)
+
 function getSkillModeText(stepId: FirstDraftStepId): string {
   const step = steps[stepId]
   if (step.skillMode === 'auto') return '自动选择技巧'
@@ -143,13 +232,51 @@ const failureOptions: Array<{ label: string; value: FirstDraftFailurePolicy }> =
   { label: '停止流程', value: 'stop' }
 ]
 
+let projectSkillsScanRequestId = 0
+
+async function scanAvailableProjectSkills(): Promise<void> {
+  const projectId = project.value?.id
+  const requestId = ++projectSkillsScanRequestId
+  discoveredProjectSkills.value = []
+  hasScannedProjectSkills.value = false
+  projectSkillsLoadError.value = ''
+
+  if (!projectId) {
+    isLoadingProjectSkills.value = false
+    return
+  }
+
+  isLoadingProjectSkills.value = true
+  try {
+    const result = await window.characterArc.scanProjectSkills(projectId)
+    if (requestId !== projectSkillsScanRequestId || !props.show || project.value?.id !== projectId) return
+    if (!result.success) {
+      throw new Error(result.error ?? 'skills 加载失败')
+    }
+    discoveredProjectSkills.value = result.skills ?? []
+    hasScannedProjectSkills.value = true
+  } catch (error) {
+    if (requestId !== projectSkillsScanRequestId || !props.show || project.value?.id !== projectId) return
+    projectSkillsLoadError.value = error instanceof Error ? error.message : 'skills 加载失败'
+  } finally {
+    if (requestId === projectSkillsScanRequestId) {
+      isLoadingProjectSkills.value = false
+    }
+  }
+}
+
 watch(() => props.show, (visible) => {
-  if (!visible) return
+  if (!visible) {
+    projectSkillsScanRequestId += 1
+    isLoadingProjectSkills.value = false
+    return
+  }
   targetWordCount.value = parseChapterWordTarget(chapter.value?.wordTarget) || 3000
   selectedRefIds.value = [...(project.value?.selectedReferenceWorkIds ?? [])]
   userPrompt.value = ''
   expandedStepId.value = 'draft'
   Object.assign(steps, createDefaultFirstDraftSteps())
+  void scanAvailableProjectSkills()
 })
 
 function toggleStep(stepId: FirstDraftStepId, value: boolean): void {
@@ -221,6 +348,100 @@ function handleConfirm(): void {
           />
         </section>
       </div>
+
+      <section class="config-section context-preview-panel">
+        <div class="section-title-row">
+          <div>
+            <label class="section-label">本章上下文预览</label>
+            <p class="section-hint">生成初稿会优先带入这些角色、组织、设定和关系；来源包含当前章节、大纲绑定和相邻章节。</p>
+          </div>
+          <div class="context-stat-row">
+            <span v-for="item in contextStats" :key="item.label" class="context-stat">
+              {{ item.label }} {{ item.value }}
+            </span>
+          </div>
+        </div>
+
+        <div v-if="hasContextPreviewData" class="context-preview-grid">
+          <section class="context-preview-block outline-block">
+            <span class="preview-label">当前绑定大纲</span>
+            <strong>{{ contextPreview.currentOutlineItem?.title || '未绑定大纲' }}</strong>
+            <p>{{ contextPreview.currentOutlineItem?.summary || '没有绑定大纲时，会按章节标题、摘要和正文自动匹配上下文。' }}</p>
+            <div v-if="contextPreview.currentOutlineItem?.relatedCharacterNames?.length || contextPreview.currentOutlineItem?.relatedOrganizationNames?.length || contextPreview.currentOutlineItem?.relatedWorldviewTitles?.length" class="outline-linked-tags">
+              <n-tag
+                v-for="name in contextPreview.currentOutlineItem?.relatedCharacterNames ?? []"
+                :key="`character-${name}`"
+                size="small"
+                round
+                type="info"
+              >
+                {{ name }}
+              </n-tag>
+              <n-tag
+                v-for="name in contextPreview.currentOutlineItem?.relatedOrganizationNames ?? []"
+                :key="`organization-${name}`"
+                size="small"
+                round
+                type="warning"
+              >
+                {{ name }}
+              </n-tag>
+              <n-tag
+                v-for="title in contextPreview.currentOutlineItem?.relatedWorldviewTitles ?? []"
+                :key="`worldview-${title}`"
+                size="small"
+                round
+                type="success"
+              >
+                {{ title }}
+              </n-tag>
+            </div>
+          </section>
+
+          <section class="context-preview-block">
+            <span class="preview-label">相关角色</span>
+            <div v-if="contextPreview.characters.length" class="preview-chip-list">
+              <n-tag v-for="item in contextPreview.characters" :key="item.id" size="small" round>
+                {{ item.name }}{{ item.role ? ` · ${item.role}` : '' }}
+              </n-tag>
+            </div>
+            <p v-else class="preview-empty">暂无匹配角色</p>
+          </section>
+
+          <section class="context-preview-block">
+            <span class="preview-label">相关组织</span>
+            <div v-if="contextPreview.organizations.length" class="preview-chip-list">
+              <n-tag v-for="item in contextPreview.organizations" :key="item.id" size="small" round>
+                {{ item.name }}{{ item.type ? ` · ${item.type}` : '' }}
+              </n-tag>
+            </div>
+            <p v-else class="preview-empty">暂无匹配组织</p>
+          </section>
+
+          <section class="context-preview-block">
+            <span class="preview-label">相关设定</span>
+            <div v-if="contextPreview.worldviewEntries.length" class="preview-chip-list">
+              <n-tag v-for="item in contextPreview.worldviewEntries" :key="item.id" size="small" round>
+                {{ item.title }}{{ item.type ? ` · ${item.type}` : '' }}
+              </n-tag>
+            </div>
+            <p v-else class="preview-empty">暂无匹配设定</p>
+          </section>
+
+          <section class="context-preview-block relation-block">
+            <span class="preview-label">关系与归属</span>
+            <div v-if="previewRelationships.length || previewMemberships.length" class="relation-preview-list">
+              <span v-for="item in previewRelationships" :key="`rel-${item.id}`">{{ item.label }}</span>
+              <span v-for="item in previewMemberships" :key="`mem-${item.id}`">{{ item.label }}</span>
+            </div>
+            <p v-else class="preview-empty">暂无匹配关系</p>
+          </section>
+        </div>
+
+        <div v-else class="context-preview-empty">
+          当前项目还没有可用于本章预览的角色、组织或设定。
+        </div>
+      </section>
 
       <section v-if="referenceWorks.length > 0" class="config-section reference-panel">
         <div class="section-title-row">
@@ -316,7 +537,10 @@ function handleConfirm(): void {
                       <span class="field-count">{{ getSelectedSkills(activeStep.id).length }} 个</span>
                     </div>
                   </div>
-                  <div v-if="selectableProjectSkills.length > 0" class="skill-picker-list arc-scrollbar">
+                  <div v-if="isLoadingProjectSkills" class="skill-picker-empty">
+                    正在加载可用 skills...
+                  </div>
+                  <div v-else-if="selectableProjectSkills.length > 0" class="skill-picker-list arc-scrollbar">
                     <button
                       v-for="skill in selectableProjectSkills"
                       :key="skill.id"
@@ -333,8 +557,8 @@ function handleConfirm(): void {
                       <span class="skill-picker-mark">{{ isSkillSelected(activeStep.id, skill.id) ? '已选' : '选择' }}</span>
                     </button>
                   </div>
-                  <div v-else class="skill-picker-empty">
-                    当前项目还没有适合初稿流程手动指定的 skills。
+                  <div v-else class="skill-picker-empty" :class="{ error: projectSkillsLoadError }">
+                    {{ projectSkillsLoadError || '当前项目还没有适合初稿流程手动指定的 skills。' }}
                   </div>
                 </section>
               </template>
@@ -419,6 +643,7 @@ function handleConfirm(): void {
 .compact-panel,
 .prompt-panel,
 .reference-panel,
+.context-preview-panel,
 .workflow-section {
   border: 1px solid var(--arc-border, rgba(120, 120, 120, 0.2));
   border-radius: 8px;
@@ -461,6 +686,109 @@ function handleConfirm(): void {
   font-size: 11px;
   line-height: 1;
   padding: 5px 8px;
+}
+
+.context-preview-panel {
+  gap: 12px;
+}
+
+.context-stat-row {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.context-stat {
+  border: 1px solid var(--arc-border, rgba(120, 120, 120, 0.22));
+  border-radius: 999px;
+  color: var(--arc-text-secondary, #666);
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 8px;
+}
+
+.context-preview-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.1fr) repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.context-preview-block {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+  border: 1px solid var(--arc-border, rgba(120, 120, 120, 0.16));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--arc-bg-body, #f8f8f8) 58%, var(--arc-bg-surface, #fff));
+  padding: 10px;
+}
+
+.outline-block,
+.relation-block {
+  grid-row: span 2;
+}
+
+.preview-label {
+  color: var(--arc-text-hint, #999);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.context-preview-block strong {
+  overflow: hidden;
+  color: var(--arc-text-primary, #222);
+  font-size: 13px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-preview-block p {
+  margin: 0;
+  color: var(--arc-text-secondary, #666);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.outline-linked-tags,
+.preview-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.relation-preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.relation-preview-list span {
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--arc-bg-surface, #fff);
+  color: var(--arc-text-secondary, #666);
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 6px 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-empty,
+.context-preview-empty {
+  color: var(--arc-text-hint, #999);
+  font-size: 12px;
+}
+
+.context-preview-empty {
+  border: 1px dashed var(--arc-border, rgba(120, 120, 120, 0.28));
+  border-radius: 8px;
+  padding: 14px;
+  text-align: center;
 }
 
 .checkbox-list {
@@ -794,6 +1122,10 @@ function handleConfirm(): void {
   text-align: center;
 }
 
+.skill-picker-empty.error {
+  color: var(--arc-danger, #d03050);
+}
+
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
@@ -802,6 +1134,7 @@ function handleConfirm(): void {
 
 @media (max-width: 640px) {
   .overview-grid,
+  .context-preview-grid,
   .workflow-layout {
     grid-template-columns: 1fr;
   }
