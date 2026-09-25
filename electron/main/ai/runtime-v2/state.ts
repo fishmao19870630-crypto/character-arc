@@ -23,7 +23,9 @@ export async function getSharedConversation(): Promise<ConversationManager> {
   if (!ensureDbFn) throw new Error('Runtime state not configured; call configureRuntimeState first.')
   const db = await ensureDbFn()
   stagedChangesStore.configure(db)
-  sharedConversation = new ConversationManager(db)
+  const conversation = new ConversationManager(db)
+  conversation.recoverInterruptedTurns()
+  sharedConversation = conversation
   return sharedConversation
 }
 

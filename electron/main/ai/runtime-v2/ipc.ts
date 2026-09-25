@@ -20,6 +20,8 @@ import {
   type StageBindTargetRequest,
   type StageCommitRequest,
   type StageRejectRequest,
+  type SkillExecutionReceiptItem,
+  type SkillUseMode,
   type SurfaceDefinition,
   type TurnEvent,
   type TurnCancelRequest,
@@ -34,6 +36,7 @@ import type { ConversationManager } from './conversation-manager'
 import { stagedChangesStore, type StagedChangeCommitter } from './staged-changes-store'
 import { AgentLoop, type AgentLoopRunResult, type ToolFactory } from './agent-loop'
 import { configureRuntimeState, getSharedConversation } from './state'
+import { finalizeCommitBatch } from './commit-result'
 import type { EvidenceLedger } from './evidence-ledger'
 import type { AssistantRuntimePlan } from './planner'
 
@@ -53,6 +56,7 @@ export type ResolveTurnExecutionPlan = (params: {
   maxOutputTokens?: number
   runtimePlan: AssistantRuntimePlan
   evidenceLedger: EvidenceLedger
+  skillPlan: { mode: SkillUseMode; items: SkillExecutionReceiptItem[] }
 }>
 
 /** 外部依赖注入。 */
@@ -63,6 +67,8 @@ export interface AssistantIpcDeps {
   resolveTurnExecutionPlan?: ResolveTurnExecutionPlan
   /** Phase 2 注入。缺省时 stage:commit 通道拒绝服务。 */
   commitChange?: StagedChangeCommitter
+  /** 至少一项写回成功后刷新工作区快照；刷新失败不改变写库结果。 */
+  afterCommit?: () => Promise<void> | void
   /** 可选：把 v2 turn 记录到既有 AI 运行日志。 */
   emitAiRunEvent?: (payload: { projectId: string; meta: Record<string, unknown> }) => void
 }
@@ -77,6 +83,7 @@ let deps: AssistantIpcDeps | null = null
 interface ActiveTurn {
   controller: AbortController
   sessionId: string
+  turnId?: string
 }
 
 const activeTurns = new Map<string, ActiveTurn>()
@@ -306,10 +313,11 @@ function registerTurnHandlers(): void {
     ASSISTANT_IPC_CHANNELS.TURN_SEND,
     async (event, payload: TurnSendRequest) => {
       const controller = new AbortController()
+      const activeTurn: ActiveTurn = { controller, sessionId: payload.sessionId }
       const activeKeys = new Set<string>()
       const registerActiveKey = (key?: string): void => {
         if (!key) return
-        activeTurns.set(key, { controller, sessionId: payload.sessionId })
+        activeTurns.set(key, activeTurn)
         activeKeys.add(key)
       }
       registerActiveKey(payload.clientRequestId)
@@ -352,7 +360,16 @@ function registerTurnHandlers(): void {
           signal: controller.signal,
           maxSteps: payload.surface.maxSteps,
           maxOutputTokens: plan.maxOutputTokens,
-          onTurnCreated: registerActiveKey
+          onTurnCreated: (turnId) => {
+            activeTurn.turnId = turnId
+            registerActiveKey(turnId)
+            appendRuntimeEvent(cm, emitter, session.id, turnId, {
+              kind: 'skill_plan',
+              seq: 0,
+              mode: plan.skillPlan.mode,
+              items: plan.skillPlan.items
+            })
+          }
         })
         const ledgerSnapshot = plan.evidenceLedger.snapshot()
         const resumable = shouldOfferContinuation(plan.runtimePlan, ledgerSnapshot, result)
@@ -394,12 +411,31 @@ function registerTurnHandlers(): void {
 
   ipcMain.handle(
     ASSISTANT_IPC_CHANNELS.TURN_CANCEL,
-    async (_event, payload: TurnCancelRequest) => {
+    async (event, payload: TurnCancelRequest) => {
       const active = activeTurns.get(payload.turnId)
-      if (!active) return { ok: false, reason: 'turn not active or already finished' }
-      active.controller.abort()
-      activeTurns.delete(payload.turnId)
-      return { ok: true }
+      if (active) active.controller.abort()
+
+      const cm = await getConversation()
+      const persistedTurnId = active?.turnId ?? payload.turnId
+      const canceledEvent = cm.cancelStreamingTurn(persistedTurnId)
+      if (canceledEvent) {
+        try {
+          event.sender.send(ASSISTANT_IPC_CHANNELS.EVENT_STREAM, {
+            sessionId: payload.sessionId,
+            turnId: persistedTurnId,
+            event: canceledEvent
+          } satisfies AssistantEventPush)
+        } catch {
+          // renderer 已销毁则仅保留数据库终态
+        }
+      }
+
+      if (active || canceledEvent) return { ok: true }
+
+      // 停止操作保持幂等：任务刚结束但终态事件尚未渲染时，也视为已停止。
+      const turn = cm.getTurn(payload.turnId)
+      if (turn && turn.status !== 'streaming') return { ok: true }
+      return { ok: false, reason: '未找到正在运行的生成任务，已刷新会话状态。' }
     }
   )
 
@@ -483,10 +519,11 @@ function registerStageHandlers(): void {
       if ((!payload.changeIds || payload.changeIds.length === 0) && !payload.sessionId) {
         throw new Error('stage commit requires sessionId when changeIds is omitted')
       }
-      return stagedChangesStore.commit(committer, {
+      const results = await stagedChangesStore.commit(committer, {
         sessionId: payload.sessionId,
         changeIds: payload.changeIds
       })
+      return finalizeCommitBatch(results, deps?.afterCommit)
     }
   )
 }

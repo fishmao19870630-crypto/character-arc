@@ -301,11 +301,13 @@ async function handleCommit(ids?: string[]): Promise<void> {
   if (isCommitting.value) return
   isCommitting.value = true
   try {
-    const { committed, failed } = await assistant.commitAccepted(ids)
+    const { committed, failed, warnings } = await assistant.commitAccepted(ids)
     if (failed > 0 && committed > 0) {
       message.warning(`已写回 ${committed} 项，${failed} 项失败`)
     } else if (failed > 0) {
       message.error(`写回失败：${failed} 项未能提交`)
+    } else if (warnings > 0) {
+      message.warning(`已写回 ${committed} 项，但界面刷新未完成，请重新打开项目查看`)
     } else if (committed > 0) {
       message.success(`已成功写回 ${committed} 项变更`)
     }
@@ -441,10 +443,13 @@ async function handleCommit(ids?: string[]): Promise<void> {
         :is-editing="Boolean(assistant.editingTurnId.value)"
         :restored-label="assistant.restoredDraftLabel.value"
         :mode-label="currentMode.label"
+        :skill-policy="assistant.skillPolicy.value"
+        :available-skills="assistant.availableSkills.value"
         @send="sendWithMode"
         @cancel="assistant.cancel()"
         @edit-last="assistant.startEditingLastTurn()"
         @clear-restored="assistant.clearRestoredDraft()"
+        @update:skill-policy="assistant.updateSkillPolicy"
       />
     </div>
 
@@ -480,6 +485,7 @@ async function handleCommit(ids?: string[]): Promise<void> {
       <StagedChangesView
         class="stage-view"
         :changes="assistant.stagedChanges.value"
+        :commit-results="assistant.commitResults.value"
         :is-busy="assistant.isStreaming.value"
         :is-committing="isCommitting"
         @accept="(ids) => assistant.acceptChanges(ids)"

@@ -1,4 +1,5 @@
 import type { ReferenceStyleMetric } from './referenceAnalysis'
+import type { SkillUsePolicy } from '../shared/assistant-runtime'
 
 export type KnowledgeDocumentSourceType =
   | 'reference-summary'
@@ -167,6 +168,7 @@ export type WorkspacePayload = {
       enabled: boolean
       stageIds: Array<'reference' | 'premise' | 'setting' | 'outline' | 'draft'>
     }>
+    skillPolicy: SkillUsePolicy
     chapterAssistantTemplates: Array<{
       id: string
       label: string
@@ -318,6 +320,8 @@ export type WorkspacePayload = {
     apiKey: string
     baseUrl: string
     apiProtocol?: 'auto' | 'openai-responses' | 'openai-chat' | 'anthropic'
+    codexCliPath?: string
+    codexReasoningEffort?: 'default' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
     proxyUrl: string
     temperature?: number
     topP?: number
@@ -331,6 +335,8 @@ export type WorkspacePayload = {
       apiKey: string
       model: string
       apiProtocol?: 'auto' | 'openai-responses' | 'openai-chat' | 'anthropic'
+      codexCliPath?: string
+      codexReasoningEffort?: 'default' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
       temperature?: number
       topP?: number
       presencePenalty?: number
@@ -477,6 +483,15 @@ function normalizeApiProtocol(
     : 'auto'
 }
 
+function normalizeCodexReasoningEffort(
+  value: unknown
+): 'default' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' {
+  return typeof value === 'string'
+    && ['default', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(value)
+    ? value as 'default' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
+    : 'default'
+}
+
 export function normalizeAppSettings(
   settings?: Partial<WorkspacePayload['appSettings']> | null
 ): WorkspacePayload['appSettings'] {
@@ -501,48 +516,63 @@ export function normalizeAppSettings(
       ? Math.min(2, Math.max(-2, settings.frequencyPenalty))
       : undefined
 
+  const aiProfiles = Array.isArray(settings?.aiProfiles)
+    ? settings.aiProfiles
+        .filter((item): item is NonNullable<typeof settings.aiProfiles>[number] => !!item && typeof item === 'object')
+        .map((item) => ({
+          id: String(item.id ?? '').trim(),
+          name: String(item.name ?? '').trim(),
+          provider: String(item.provider ?? '').trim(),
+          baseUrl: String(item.baseUrl ?? '').trim(),
+          apiKey: String(item.apiKey ?? '').trim(),
+          model: String(item.model ?? '').trim(),
+          apiProtocol: normalizeApiProtocol(item.apiProtocol),
+          codexCliPath: typeof item.codexCliPath === 'string' ? item.codexCliPath.trim() : '',
+          codexReasoningEffort: normalizeCodexReasoningEffort(item.codexReasoningEffort),
+          temperature:
+            typeof item.temperature === 'number' && Number.isFinite(item.temperature)
+              ? Math.min(2, Math.max(0, item.temperature))
+              : undefined,
+          topP:
+            typeof item.topP === 'number' && Number.isFinite(item.topP)
+              ? Math.min(1, Math.max(0, item.topP))
+              : undefined,
+          presencePenalty:
+            typeof item.presencePenalty === 'number' && Number.isFinite(item.presencePenalty)
+              ? Math.min(2, Math.max(-2, item.presencePenalty))
+              : undefined,
+          frequencyPenalty:
+            typeof item.frequencyPenalty === 'number' && Number.isFinite(item.frequencyPenalty)
+              ? Math.min(2, Math.max(-2, item.frequencyPenalty))
+              : undefined
+        }))
+        .filter((item) => item.id)
+    : []
+  const requestedActiveProfileId = typeof settings?.activeAiProfileId === 'string'
+    ? settings.activeAiProfileId.trim()
+    : ''
+  const activeAiProfileId = aiProfiles.some((item) => item.id === requestedActiveProfileId)
+    ? requestedActiveProfileId
+    : aiProfiles[0]?.id ?? ''
+  const activeProfile = aiProfiles.find((item) => item.id === activeAiProfileId)
+
   return {
-    provider: settings?.provider || 'openai-compatible',
-    model: settings?.model || '',
-    apiKey: settings?.apiKey || '',
-    baseUrl: settings?.baseUrl || '',
-    apiProtocol: normalizeApiProtocol(settings?.apiProtocol),
+    provider: activeProfile?.provider || settings?.provider || 'openai-compatible',
+    model: activeProfile?.model ?? settings?.model ?? '',
+    apiKey: activeProfile?.apiKey ?? settings?.apiKey ?? '',
+    baseUrl: activeProfile?.baseUrl ?? settings?.baseUrl ?? '',
+    apiProtocol: activeProfile?.apiProtocol ?? normalizeApiProtocol(settings?.apiProtocol),
+    codexCliPath: activeProfile?.codexCliPath
+      ?? (typeof settings?.codexCliPath === 'string' ? settings.codexCliPath.trim() : ''),
+    codexReasoningEffort: activeProfile?.codexReasoningEffort
+      ?? normalizeCodexReasoningEffort(settings?.codexReasoningEffort),
     proxyUrl: settings?.proxyUrl || '',
-    temperature,
-    topP,
-    presencePenalty,
-    frequencyPenalty,
-    aiProfiles: Array.isArray(settings?.aiProfiles)
-      ? settings.aiProfiles
-          .filter((item): item is NonNullable<typeof settings.aiProfiles>[number] => !!item && typeof item === 'object')
-          .map((item) => ({
-            id: String(item.id ?? '').trim(),
-            name: String(item.name ?? '').trim(),
-            provider: String(item.provider ?? '').trim(),
-            baseUrl: String(item.baseUrl ?? '').trim(),
-            apiKey: String(item.apiKey ?? '').trim(),
-            model: String(item.model ?? '').trim(),
-            apiProtocol: normalizeApiProtocol(item.apiProtocol),
-            temperature:
-              typeof item.temperature === 'number' && Number.isFinite(item.temperature)
-                ? Math.min(2, Math.max(0, item.temperature))
-                : undefined,
-            topP:
-              typeof item.topP === 'number' && Number.isFinite(item.topP)
-                ? Math.min(1, Math.max(0, item.topP))
-                : undefined,
-            presencePenalty:
-              typeof item.presencePenalty === 'number' && Number.isFinite(item.presencePenalty)
-                ? Math.min(2, Math.max(-2, item.presencePenalty))
-                : undefined,
-            frequencyPenalty:
-              typeof item.frequencyPenalty === 'number' && Number.isFinite(item.frequencyPenalty)
-                ? Math.min(2, Math.max(-2, item.frequencyPenalty))
-                : undefined
-          }))
-          .filter((item) => item.id)
-      : [],
-    activeAiProfileId: typeof settings?.activeAiProfileId === 'string' ? settings.activeAiProfileId : '',
+    temperature: activeProfile?.temperature ?? temperature,
+    topP: activeProfile?.topP ?? topP,
+    presencePenalty: activeProfile?.presencePenalty ?? presencePenalty,
+    frequencyPenalty: activeProfile?.frequencyPenalty ?? frequencyPenalty,
+    aiProfiles,
+    activeAiProfileId,
     imageProvider: settings?.imageProvider || '',
     imageModel: settings?.imageModel || '',
     imageApiKey: settings?.imageApiKey || '',
@@ -609,11 +639,22 @@ export function normalizeProjectRecord(
     writingStylePrompt: project.writingStylePrompt || '',
     novelWorkflowStages: Array.isArray(project.novelWorkflowStages) ? project.novelWorkflowStages : [],
     projectSkills: Array.isArray(project.projectSkills) ? project.projectSkills : [],
+    skillPolicy: normalizeWorkspaceSkillPolicy(project.skillPolicy),
     chapterAssistantTemplates: Array.isArray(project.chapterAssistantTemplates) ? project.chapterAssistantTemplates : [],
     selectedReferenceWorkIds: Array.isArray(project.selectedReferenceWorkIds)
       ? project.selectedReferenceWorkIds.map((id) => String(id).trim()).filter(Boolean)
       : []
   }
+}
+
+function normalizeWorkspaceSkillPolicy(value: unknown): SkillUsePolicy {
+  if (!value || typeof value !== 'object') return { mode: 'auto', skillIds: [] }
+  const raw = value as { mode?: unknown; skillIds?: unknown }
+  const mode = raw.mode === 'only' || raw.mode === 'off' ? raw.mode : 'auto'
+  const skillIds = Array.isArray(raw.skillIds)
+    ? [...new Set(raw.skillIds.map((id) => String(id ?? '').trim()).filter(Boolean))]
+    : []
+  return { mode, skillIds }
 }
 
 export function normalizeCoverWorkbenchHistory(

@@ -134,7 +134,8 @@ export class AgentLoopCore {
   private buildHandlers(
     sessionId: string,
     turnId: string,
-    toolCalls: ToolCallTrace[]
+    toolCalls: ToolCallTrace[],
+    signal: AbortSignal
   ): { handlers: AiAgentStreamHandlers; flush: () => void } {
     const toolArgs = new Map<string, Record<string, unknown>>()
     let pending: { kind: 'chunk' | 'reasoning'; delta: string } | null = null
@@ -148,11 +149,12 @@ export class AgentLoopCore {
       if (!pending) return
       const event = pending
       pending = null
+      if (signal.aborted) return
       this.dispatch(sessionId, turnId, { ...event, seq: 0 } as TurnEvent)
     }
 
     const queueDelta = (kind: 'chunk' | 'reasoning', delta: string): void => {
-      if (!delta) return
+      if (!delta || signal.aborted) return
       if (pending?.kind === kind) {
         pending.delta += delta
       } else {
@@ -170,6 +172,7 @@ export class AgentLoopCore {
         queueDelta('reasoning', delta)
       },
       onToolUseStart: (toolUseId, toolName, args) => {
+        if (signal.aborted) return
         flush()
         toolArgs.set(toolUseId, args)
         this.dispatch(sessionId, turnId, {
@@ -181,6 +184,7 @@ export class AgentLoopCore {
         })
       },
       onToolResult: (toolUseId, toolName, content, isError, durationMs) => {
+        if (signal.aborted) return
         flush()
         this.dispatch(sessionId, turnId, {
           kind: 'tool_result',
@@ -199,6 +203,7 @@ export class AgentLoopCore {
         })
       },
       onAgentStatus: (message) => {
+        if (signal.aborted) return
         flush()
         this.dispatch(sessionId, turnId, {
           kind: 'agent_status',
@@ -214,8 +219,9 @@ export class AgentLoopCore {
   }
 
   /** 订阅 StagedChangesStore：本轮 turn 内的变更 → staged_change 事件双写。 */
-  private subscribeStaged(sessionId: string, turnId: string): () => void {
+  private subscribeStaged(sessionId: string, turnId: string, signal: AbortSignal): () => void {
     return this.staged.subscribe((evt) => {
+      if (signal.aborted) return
       // 只关心属于本次 turn 的变更
       if (evt.type === 'removed') {
         // 硬删除不通过 event 表达，UI 走另一条通道
@@ -257,7 +263,7 @@ export class AgentLoopCore {
     const turnId = turn.id
     const sessionId = options.session.id
     options.onTurnCreated?.(turnId)
-    const unsubscribe = this.subscribeStaged(sessionId, turnId)
+    const unsubscribe = this.subscribeStaged(sessionId, turnId, options.signal)
 
     // 工厂形态在此展开为具体 tools，让 stage_* 闭包捕获 turnId/sessionId。
     const tools: Tool[] = typeof options.tools === 'function'
@@ -275,9 +281,10 @@ export class AgentLoopCore {
     let status: TurnStatus = 'done'
     let errorMessage: string | undefined
 
-    const stream = this.buildHandlers(sessionId, turnId, toolCalls)
+    const stream = this.buildHandlers(sessionId, turnId, toolCalls, options.signal)
 
     try {
+      if (options.signal.aborted) throw new Error('aborted')
       const result = await this.runAgentImpl({
         settings: options.settings,
         systemPrompt: options.systemPrompt,
@@ -291,6 +298,7 @@ export class AgentLoopCore {
         maxTokens: options.maxOutputTokens,
         maxSteps: options.maxSteps ?? options.surface.maxSteps
       })
+      if (options.signal.aborted) throw new Error('aborted')
       finalText = result.finalText
       usage = result.usage
       agentIterations = result.iterations
@@ -318,11 +326,13 @@ export class AgentLoopCore {
       stream.flush()
       if (options.signal.aborted) {
         status = 'canceled'
-        this.dispatch(sessionId, turnId, {
-          kind: 'canceled',
-          seq: 0,
-          content: finalText || undefined
-        })
+        if (this.conversation.getTurn(turnId)?.status === 'streaming') {
+          this.dispatch(sessionId, turnId, {
+            kind: 'canceled',
+            seq: 0,
+            content: finalText || undefined
+          })
+        }
       } else {
         status = 'error'
         errorMessage = this.isToolUseNotSupportedError(e)

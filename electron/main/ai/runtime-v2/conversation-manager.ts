@@ -242,6 +242,7 @@ export class ConversationManager {
     updateTurnStatus: StatementSync
     getTurn: StatementSync
     listTurnsBySession: StatementSync
+    listStreamingTurns: StatementSync
     getTurnOrder: StatementSync
     listTurnIdsFrom: StatementSync
     deleteTurnsFrom: StatementSync
@@ -298,6 +299,9 @@ export class ConversationManager {
       ),
       listTurnsBySession: db.prepare(
         `SELECT * FROM assistant_turns WHERE session_id = ? ORDER BY rowid ASC`
+      ),
+      listStreamingTurns: db.prepare(
+        `SELECT * FROM assistant_turns WHERE status = 'streaming' ORDER BY rowid ASC`
       ),
       getTurnOrder: db.prepare(
         `SELECT rowid AS row_no, user_message
@@ -453,6 +457,60 @@ export class ConversationManager {
   listTurns(sessionId: string): AssistantTurn[] {
     const rows = this.stmts.listTurnsBySession.all(sessionId) as unknown as TurnRow[]
     return rows.map(rowToTurn)
+  }
+
+  /** 将仍处于 streaming 的单个 Turn 幂等收口为 canceled。 */
+  cancelStreamingTurn(id: string): TurnEvent | null {
+    const turn = this.getTurn(id)
+    if (!turn || turn.status !== 'streaming') return null
+
+    const event: TurnEvent = {
+      kind: 'canceled',
+      seq: 0,
+      content: turn.assistantMessage || undefined
+    }
+
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const persisted = this.appendEvent(id, event)
+      this.stmts.updateTurnStatus.run('canceled', turn.assistantMessage, id)
+      this.touchSession(turn.sessionId)
+      this.db.exec('COMMIT')
+      return { ...event, seq: persisted.seq }
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      this.nextSeqByTurn.delete(id)
+      throw error
+    }
+  }
+
+  /**
+   * 应用进程重启后，数据库里的 streaming Turn 已不可能继续执行。
+   * 将这些孤儿 Turn 收口为 canceled，避免前端恢复后永久锁在“生成中”。
+   */
+  recoverInterruptedTurns(): number {
+    const rows = this.stmts.listStreamingTurns.all() as unknown as TurnRow[]
+    if (rows.length === 0) return 0
+
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      for (const row of rows) {
+        this.appendEvent(row.id, {
+          kind: 'canceled',
+          seq: 0,
+          content: row.assistant_message || undefined
+        })
+        this.stmts.updateTurnStatus.run('canceled', row.assistant_message, row.id)
+        this.touchSession(row.session_id)
+      }
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      for (const row of rows) this.nextSeqByTurn.delete(row.id)
+      throw error
+    }
+
+    return rows.length
   }
 
   /** 删除指定轮次及其后的全部轮次。事件、暂存变更和运行状态由外键级联清理。 */

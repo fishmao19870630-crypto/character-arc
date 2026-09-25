@@ -1,3 +1,7 @@
+import type { SkillUsePolicy } from '@shared/assistant-runtime'
+
+export type { SkillUsePolicy } from '@shared/assistant-runtime'
+
 /** 主题名称，决定应用的视觉色调 */
 export type ThemeName = 'ocean' | 'jade' | 'amber' | 'rose'
 
@@ -329,6 +333,8 @@ export interface ProjectSummary {
   novelWorkflowStages: NovelWorkflowStageState[]
   /** 项目级 skills 启用状态 */
   projectSkills: ProjectSkillItem[]
+  /** AI 对话默认使用的 Skill 策略 */
+  skillPolicy: SkillUsePolicy
   /** 项目目标平台 */
   targetPlatform: string
   /** 本次用于生成创作记忆的参考作品 ID 列表（指向全局拆书库），可为空 */
@@ -875,6 +881,8 @@ export interface AiProfile {
   apiKey: string
   model: string
   apiProtocol?: 'auto' | 'openai-responses' | 'openai-chat' | 'anthropic'
+  codexCliPath?: string
+  codexReasoningEffort?: 'default' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
   temperature?: number
   topP?: number
   presencePenalty?: number
@@ -894,6 +902,10 @@ export interface AppSettings {
   baseUrl: string
   /** API 线协议；auto 时按供应商和模型目录解析 */
   apiProtocol?: 'auto' | 'openai-responses' | 'openai-chat' | 'anthropic'
+  /** Codex CLI 可执行文件或所在目录 */
+  codexCliPath: string
+  /** Codex CLI 推理强度 */
+  codexReasoningEffort: 'default' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
   /** AI 网络请求使用的 HTTP/HTTPS 代理地址 */
   proxyUrl: string
   /** 可选：模型采样温度，留空时使用服务端默认值 */

@@ -112,6 +112,7 @@ interface ProjectWorkspacePayload {
     chapterAssistantTemplates?: ProjectSummary['chapterAssistantTemplates']
     novelWorkflowStages?: ProjectSummary['novelWorkflowStages']
     projectSkills?: ProjectSummary['projectSkills']
+    skillPolicy?: ProjectSummary['skillPolicy']
     targetPlatform?: string
     selectedReferenceWorkIds?: ProjectSummary['selectedReferenceWorkIds']
     coverHistory?: ProjectSummary['coverHistory']
@@ -792,6 +793,7 @@ export const useAppStore = defineStore('app', () => {
       chapterAssistantTemplates: normalizeChapterAssistantTemplates(payload.project?.chapterAssistantTemplates),
       novelWorkflowStages: payload.project?.novelWorkflowStages ?? createDefaultNovelWorkflowStages(),
       projectSkills: payload.project?.projectSkills ?? [],
+      skillPolicy: payload.project?.skillPolicy ?? { mode: 'auto', skillIds: [] },
       targetPlatform: payload.project?.targetPlatform?.trim() || '',
       selectedReferenceWorkIds: payload.project?.selectedReferenceWorkIds ?? [],
       coverHistory: payload.project?.coverHistory ?? []
@@ -1095,16 +1097,7 @@ export const useAppStore = defineStore('app', () => {
   }
 
   /** 打开 Skills 独立页面 */
-  function openSkillsPage(projectId?: string): void {
-    const resolvedProjectId = String(projectId ?? selectedProjectId.value ?? '').trim()
-    const targetProject = projects.value.find((item) => item.id === resolvedProjectId) ?? projects.value[0]
-
-    if (targetProject) {
-      ensureProjectWorkspace(targetProject.id)
-      selectedProjectId.value = targetProject.id
-      syncSelectedChapter(targetProject.id)
-    }
-
+  function openSkillsPage(): void {
     currentView.value = 'skills'
     schedulePersist('fast')
   }
@@ -1177,6 +1170,7 @@ export const useAppStore = defineStore('app', () => {
       chapterAssistantTemplates: normalizeChapterAssistantTemplates(payload.project.chapterAssistantTemplates),
       novelWorkflowStages: payload.project.novelWorkflowStages ?? createDefaultNovelWorkflowStages(),
       projectSkills: payload.project.projectSkills ?? [],
+      skillPolicy: payload.project.skillPolicy ?? { mode: 'auto', skillIds: [] },
       targetPlatform: payload.project.targetPlatform?.trim() || '',
       selectedReferenceWorkIds: payload.project.selectedReferenceWorkIds ?? [],
       coverHistory: payload.project.coverHistory ?? []
@@ -1266,6 +1260,7 @@ export const useAppStore = defineStore('app', () => {
             novelWorkflowStages:
               payload.novelWorkflowStages !== undefined ? payload.novelWorkflowStages : project.novelWorkflowStages,
             projectSkills: payload.projectSkills !== undefined ? payload.projectSkills : project.projectSkills,
+            skillPolicy: payload.skillPolicy !== undefined ? payload.skillPolicy : project.skillPolicy,
             targetPlatform: payload.targetPlatform !== undefined ? payload.targetPlatform.trim() : project.targetPlatform,
             selectedReferenceWorkIds: payload.selectedReferenceWorkIds !== undefined
               ? payload.selectedReferenceWorkIds
@@ -2804,6 +2799,8 @@ export const useAppStore = defineStore('app', () => {
     appSettings.value.apiKey = profile.apiKey
     appSettings.value.baseUrl = profile.baseUrl
     appSettings.value.apiProtocol = profile.apiProtocol ?? 'auto'
+    appSettings.value.codexCliPath = profile.codexCliPath ?? ''
+    appSettings.value.codexReasoningEffort = profile.codexReasoningEffort ?? 'default'
     appSettings.value.temperature = profile.temperature
     appSettings.value.topP = profile.topP
     appSettings.value.presencePenalty = profile.presencePenalty
@@ -2839,6 +2836,8 @@ export const useAppStore = defineStore('app', () => {
       if (updates.apiKey !== undefined) appSettings.value.apiKey = updates.apiKey
       if (updates.baseUrl !== undefined) appSettings.value.baseUrl = updates.baseUrl
       if (updates.apiProtocol !== undefined) appSettings.value.apiProtocol = updates.apiProtocol
+      if (updates.codexCliPath !== undefined) appSettings.value.codexCliPath = updates.codexCliPath
+      if (updates.codexReasoningEffort !== undefined) appSettings.value.codexReasoningEffort = updates.codexReasoningEffort
       if ('temperature' in updates) appSettings.value.temperature = updates.temperature
       if ('topP' in updates) appSettings.value.topP = updates.topP
       if ('presencePenalty' in updates) appSettings.value.presencePenalty = updates.presencePenalty
